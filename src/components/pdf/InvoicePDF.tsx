@@ -45,6 +45,12 @@ interface InvoicePDFProps {
     email: string;
     gstin: string;
   };
+  gstBreakdown?: {
+    cgst: number;
+    sgst: number;
+    igst: number;
+    total_gst: number;
+  };
 }
 
 const styles = StyleSheet.create({
@@ -148,7 +154,8 @@ export const InvoicePDF: React.FC<InvoicePDFProps> = ({
     phone: "Your Phone",
     email: "your@email.com",
     gstin: "Your GSTIN"
-  }
+  },
+  gstBreakdown
 }) => (
   <Document>
     <Page size="A4" style={styles.page}>
@@ -235,10 +242,37 @@ export const InvoicePDF: React.FC<InvoicePDFProps> = ({
           <Text>Subtotal:</Text>
           <Text>{formatIndianCurrency(invoice.subtotal, false)}</Text>
         </View>
-        <View style={styles.totalRow}>
-          <Text>Tax Amount:</Text>
-          <Text>{formatIndianCurrency(invoice.tax_amount, false)}</Text>
-        </View>
+        {gstBreakdown && (gstBreakdown.cgst > 0 || gstBreakdown.sgst > 0 || gstBreakdown.igst > 0) ? (
+          <>
+            {gstBreakdown.cgst > 0 && (
+              <View style={styles.totalRow}>
+                <Text>CGST:</Text>
+                <Text>{formatIndianCurrency(gstBreakdown.cgst, false)}</Text>
+              </View>
+            )}
+            {gstBreakdown.sgst > 0 && (
+              <View style={styles.totalRow}>
+                <Text>SGST:</Text>
+                <Text>{formatIndianCurrency(gstBreakdown.sgst, false)}</Text>
+              </View>
+            )}
+            {gstBreakdown.igst > 0 && (
+              <View style={styles.totalRow}>
+                <Text>IGST:</Text>
+                <Text>{formatIndianCurrency(gstBreakdown.igst, false)}</Text>
+              </View>
+            )}
+            <View style={styles.totalRow}>
+              <Text>Total Tax:</Text>
+              <Text>{formatIndianCurrency(gstBreakdown.total_gst || invoice.tax_amount, false)}</Text>
+            </View>
+          </>
+        ) : (
+          <View style={styles.totalRow}>
+            <Text>Tax Amount:</Text>
+            <Text>{formatIndianCurrency(invoice.tax_amount, false)}</Text>
+          </View>
+        )}
         <View style={[styles.totalRow, styles.grandTotal]}>
           <Text style={styles.totalLabel}>Total Amount:</Text>
           <Text style={styles.totalLabel}>{formatIndianCurrency(invoice.total_amount, false)}</Text>

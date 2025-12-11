@@ -452,8 +452,10 @@ export const ReportsManager: React.FC = () => {
           const grossProfit = netSales - effectiveCOGS;
           
           // Calculate net profit (with indirect income and expenses)
-          // Net Profit = Gross Profit - Indirect Expenses + Indirect Income - Tax Difference
-          const netProfit = grossProfit - totalIndirectExpenses + indirectIncome - (netPurchaseTax - netSalesTax);
+          // Net Profit = Gross Profit - Indirect Expenses + Indirect Income
+          // Note: Tax difference (netSalesTax - netPurchaseTax) is already accounted for in the gross profit calculation
+          // Sales tax collected increases revenue, purchase tax paid increases expenses
+          const netProfit = grossProfit - totalIndirectExpenses + indirectIncome;
 
           console.log('P&L Report - Net Sales:', netSales, '(Sales:', totalSales, '- Returns:', totalSaleReturns, ') Net Purchases:', netPurchases, '(Purchases:', totalPurchases, '- Returns:', totalPurchaseReturns, ') Opening:', openingStockCost, 'Closing:', closingStock, 'COGS:', effectiveCOGS, 'Indirect Exp (invoices):', indirectExpenses, 'Indirect Exp (ledgers):', indirectExpensesFromLedgers, 'Total Indirect Exp:', totalIndirectExpenses, 'Indirect Income:', indirectIncome, 'Gross Profit:', grossProfit, 'Net Profit:', netProfit);
 
@@ -1074,6 +1076,7 @@ export const ReportsManager: React.FC = () => {
                 invoice_number,
                 invoice_date,
                 taxable_amount,
+                gst_rate,
                 cgst,
                 sgst,
                 igst,
@@ -1102,47 +1105,94 @@ export const ReportsManager: React.FC = () => {
           const purchaseTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'purchase');
           // Note: saleReturns and purchaseReturns are excluded from calculations (treated as void)
 
-          // Calculate CGST totals (only regular transactions, returns excluded as void)
-          const salesCGST = salesTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
-          const purchaseCGST = purchaseTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
-          const cgstTotal = salesCGST + purchaseCGST;
+          // Calculate Output Tax (Sales - GST collected from customers)
+          const outputCGST = salesTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
+          const outputSGST = salesTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
+          const outputIGST = salesTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
+          const totalOutputTax = outputCGST + outputSGST + outputIGST;
 
-          // Calculate SGST totals (only regular transactions, returns excluded as void)
-          const salesSGST = salesTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
-          const purchaseSGST = purchaseTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
-          const sgstTotal = salesSGST + purchaseSGST;
+          // Calculate Input Tax (Purchases - GST paid to suppliers)
+          const inputCGST = purchaseTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
+          const inputSGST = purchaseTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
+          const inputIGST = purchaseTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
+          const totalInputTax = inputCGST + inputSGST + inputIGST;
 
-          // Calculate IGST totals (only regular transactions, returns excluded as void)
-          const salesIGST = salesTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
-          const purchaseIGST = purchaseTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
-          const igstTotal = salesIGST + purchaseIGST;
-
-          // Calculate total GST
-          const totalGST = cgstTotal + sgstTotal + igstTotal;
+          // Calculate Net GST Liability (Output Tax - Input Tax)
+          const netCGST = outputCGST - inputCGST;
+          const netSGST = outputSGST - inputSGST;
+          const netIGST = outputIGST - inputIGST;
+          const netGSTLiability = totalOutputTax - totalInputTax;
 
           // Map only regular GST entries for detailed view (exclude returns as void)
+          // Create separate rows for CGST, SGST, and IGST breakdown
           const regularGSTData = (gstData || []).filter((g: any) => 
             g.transaction_type === 'sale' || g.transaction_type === 'purchase'
           );
-          sampleData = regularGSTData.map((g: any) => ({
-            subcategory: g.invoice_number || '',
-            amount: g.total_gst || 0,
-            category: g.transaction_type || '',
-            invoice_number: g.invoice_number,
-            invoice_date: g.invoice_date,
-            transaction_type: g.transaction_type,
-            taxable_amount: g.taxable_amount || 0,
-            cgst: g.cgst || 0,
-            sgst: g.sgst || 0,
-            igst: g.igst || 0,
-            total_gst: g.total_gst || 0
-          }));
+          
+          // Create detailed GST breakdown rows
+          const gstBreakdownRows: any[] = [];
+          regularGSTData.forEach((g: any) => {
+            // Add CGST row if CGST > 0
+            if (g.cgst && g.cgst > 0) {
+              gstBreakdownRows.push({
+                subcategory: g.invoice_number || '',
+                amount: g.cgst || 0,
+                category: 'CGST',
+                invoice_number: g.invoice_number,
+                invoice_date: g.invoice_date,
+                transaction_type: g.transaction_type,
+                taxable_amount: g.taxable_amount || 0,
+                gst_type: 'CGST',
+                gst_rate: g.gst_rate || 0
+              });
+            }
+            // Add SGST row if SGST > 0
+            if (g.sgst && g.sgst > 0) {
+              gstBreakdownRows.push({
+                subcategory: g.invoice_number || '',
+                amount: g.sgst || 0,
+                category: 'SGST',
+                invoice_number: g.invoice_number,
+                invoice_date: g.invoice_date,
+                transaction_type: g.transaction_type,
+                taxable_amount: g.taxable_amount || 0,
+                gst_type: 'SGST',
+                gst_rate: g.gst_rate || 0
+              });
+            }
+            // Add IGST row if IGST > 0
+            if (g.igst && g.igst > 0) {
+              gstBreakdownRows.push({
+                subcategory: g.invoice_number || '',
+                amount: g.igst || 0,
+                category: 'IGST',
+                invoice_number: g.invoice_number,
+                invoice_date: g.invoice_date,
+                transaction_type: g.transaction_type,
+                taxable_amount: g.taxable_amount || 0,
+                gst_type: 'IGST',
+                gst_rate: g.gst_rate || 0
+              });
+            }
+          });
+          
+          sampleData = gstBreakdownRows;
 
             newSummary = {
-              totalSales: cgstTotal,
-              totalPurchases: sgstTotal,
-              grossProfit: igstTotal,
-              netProfit: totalGST
+              totalSales: outputCGST, // Output CGST
+              totalPurchases: outputSGST, // Output SGST
+              grossProfit: outputIGST, // Output IGST
+              netProfit: netGSTLiability, // Net GST Liability
+              // Store additional breakdown for summary display
+              inputCGST,
+              inputSGST,
+              inputIGST,
+              outputCGST,
+              outputSGST,
+              outputIGST,
+              netCGST,
+              netSGST,
+              netIGST
             };
           } catch (error: any) {
             console.error('GST report error:', error);
@@ -2189,9 +2239,9 @@ export const ReportsManager: React.FC = () => {
                       <>
                         <TableHead>Transaction Type</TableHead>
                         <TableHead>GST Type</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
-                        <TableHead className="text-right">Rate</TableHead>
-                        <TableHead className="text-right">Tax Amount</TableHead>
+                        <TableHead className="text-right">Taxable Amount</TableHead>
+                        <TableHead className="text-right">GST Rate</TableHead>
+                        <TableHead className="text-right">GST Amount</TableHead>
                       </>
                     )}
                     {selectedReport === 'payment-report' && (
@@ -2332,11 +2382,22 @@ export const ReportsManager: React.FC = () => {
                       )}
                       {selectedReport === 'gst-report' && (
                         <>
-                          <TableCell className="font-medium">{row.subcategory}</TableCell>
-                          <TableCell>{row.category}</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(5000)}</TableCell>
-                          <TableCell className="text-right">18%</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(row.amount)}</TableCell>
+                          <TableCell className="font-medium">
+                            <Badge variant={row.transaction_type === 'sale' ? 'default' : 'secondary'}>
+                              {row.transaction_type === 'sale' ? 'Sale' : 'Purchase'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={
+                              row.category === 'CGST' ? 'default' :
+                              row.category === 'SGST' ? 'secondary' : 'outline'
+                            }>
+                              {row.category || row.gst_type || 'GST'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">{formatIndianCurrency(row.taxable_amount || 0)}</TableCell>
+                          <TableCell className="text-right">{row.gst_rate || 0}%</TableCell>
+                          <TableCell className="text-right">{formatIndianCurrency(row.amount || 0)}</TableCell>
                         </>
                       )}
                       {selectedReport === 'payment-report' && (
@@ -2639,27 +2700,45 @@ export const ReportsManager: React.FC = () => {
                 {selectedReport === 'gst-report' && (
                   <>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Total CGST</p>
+                      <p className="text-sm text-muted-foreground">Output CGST</p>
                       <p className="text-lg font-semibold text-blue-500">
-                        {formatIndianCurrency(900)}
+                        {formatIndianCurrency((summary as any).outputCGST || 0)}
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Total SGST</p>
+                      <p className="text-sm text-muted-foreground">Output SGST</p>
                       <p className="text-lg font-semibold text-green-500">
-                        {formatIndianCurrency(900)}
+                        {formatIndianCurrency((summary as any).outputSGST || 0)}
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Total IGST</p>
+                      <p className="text-sm text-muted-foreground">Output IGST</p>
                       <p className="text-lg font-semibold text-orange-500">
-                        {formatIndianCurrency(76900)}
+                        {formatIndianCurrency((summary as any).outputIGST || 0)}
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Net GST</p>
-                      <p className="text-lg font-semibold text-purple-500">
-                        {formatIndianCurrency(summary.netProfit)}
+                      <p className="text-sm text-muted-foreground">Input CGST</p>
+                      <p className="text-lg font-semibold text-blue-400">
+                        {formatIndianCurrency((summary as any).inputCGST || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Input SGST</p>
+                      <p className="text-lg font-semibold text-green-400">
+                        {formatIndianCurrency((summary as any).inputSGST || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Input IGST</p>
+                      <p className="text-lg font-semibold text-orange-400">
+                        {formatIndianCurrency((summary as any).inputIGST || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Net GST Liability</p>
+                      <p className={`text-lg font-semibold ${summary.netProfit >= 0 ? 'text-red-500' : 'text-green-500'}`}>
+                        {formatIndianCurrency(summary.netProfit || 0)}
                       </p>
                     </div>
                   </>

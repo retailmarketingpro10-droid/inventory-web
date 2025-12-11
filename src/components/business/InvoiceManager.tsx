@@ -1047,6 +1047,13 @@ export const InvoiceManager = () => {
     }
   };
 
+  const [invoiceGSTBreakdown, setInvoiceGSTBreakdown] = useState<{
+    cgst: number;
+    sgst: number;
+    igst: number;
+    total_gst: number;
+  } | null>(null);
+
   const viewInvoice = async (invoice: Invoice) => {
     try {
       const { data, error } = await supabase
@@ -1057,6 +1064,28 @@ export const InvoiceManager = () => {
       if (error) throw error;
       setInvoiceItems(data || []);
       setSelectedInvoice(invoice);
+      
+      // Fetch GST breakdown from gst_entries
+      const { data: gstData, error: gstError } = await supabase
+        .from('gst_entries' as any)
+        .select('cgst, sgst, igst, total_gst')
+        .eq('invoice_id', invoice.id)
+        .maybeSingle();
+      
+      if (gstError) {
+        console.error('Error fetching GST breakdown:', gstError);
+      } else if (gstData) {
+        const gst = gstData as any;
+        setInvoiceGSTBreakdown({
+          cgst: gst.cgst || 0,
+          sgst: gst.sgst || 0,
+          igst: gst.igst || 0,
+          total_gst: gst.total_gst || 0
+        });
+      } else {
+        setInvoiceGSTBreakdown(null);
+      }
+      
       setViewOpen(true);
     } catch (error) {
       toast({
@@ -1076,6 +1105,13 @@ export const InvoiceManager = () => {
         .eq('invoice_id', invoice.id);
 
       if (error) throw error;
+      
+      // Fetch GST breakdown from gst_entries
+      const { data: gstData } = await supabase
+        .from('gst_entries' as any)
+        .select('cgst, sgst, igst, total_gst')
+        .eq('invoice_id', invoice.id)
+        .maybeSingle();
       
       // Fetch company info from profile - use selected company, not first one
       const { data: profileData } = await supabase
@@ -1131,6 +1167,12 @@ export const InvoiceManager = () => {
             email: companyInfo.email || user?.email || "your@email.com",
             gstin: companyInfo.gst || companyInfo.gstin || "Your GSTIN"
           }}
+          gstBreakdown={gstData ? {
+            cgst: (gstData as any).cgst || 0,
+            sgst: (gstData as any).sgst || 0,
+            igst: (gstData as any).igst || 0,
+            total_gst: (gstData as any).total_gst || 0
+          } : undefined}
         />
       );
       
@@ -2490,7 +2532,12 @@ export const InvoiceManager = () => {
         )}
       </div>
 
-      <Dialog open={viewOpen} onOpenChange={setViewOpen}>
+      <Dialog open={viewOpen} onOpenChange={(open) => {
+        setViewOpen(open);
+        if (!open) {
+          setInvoiceGSTBreakdown(null);
+        }
+      }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Invoice Details - {selectedInvoice?.invoice_number}</DialogTitle>
@@ -2577,7 +2624,22 @@ export const InvoiceManager = () => {
               <div className="border-t pt-4">
                 <div className="space-y-1 text-right">
                   <p>Subtotal: {formatIndianCurrency(selectedInvoice.subtotal)}</p>
-                  <p>Tax: {formatIndianCurrency(selectedInvoice.tax_amount)}</p>
+                  {invoiceGSTBreakdown && (invoiceGSTBreakdown.cgst > 0 || invoiceGSTBreakdown.sgst > 0 || invoiceGSTBreakdown.igst > 0) ? (
+                    <>
+                      {invoiceGSTBreakdown.cgst > 0 && (
+                        <p className="text-sm text-muted-foreground">CGST: {formatIndianCurrency(invoiceGSTBreakdown.cgst)}</p>
+                      )}
+                      {invoiceGSTBreakdown.sgst > 0 && (
+                        <p className="text-sm text-muted-foreground">SGST: {formatIndianCurrency(invoiceGSTBreakdown.sgst)}</p>
+                      )}
+                      {invoiceGSTBreakdown.igst > 0 && (
+                        <p className="text-sm text-muted-foreground">IGST: {formatIndianCurrency(invoiceGSTBreakdown.igst)}</p>
+                      )}
+                      <p>Total Tax: {formatIndianCurrency(invoiceGSTBreakdown.total_gst || selectedInvoice.tax_amount)}</p>
+                    </>
+                  ) : (
+                    <p>Tax: {formatIndianCurrency(selectedInvoice.tax_amount)}</p>
+                  )}
                   <p className="text-lg font-bold">Total: {formatIndianCurrency(selectedInvoice.total_amount)}</p>
                   {selectedInvoice.amount_due !== undefined && selectedInvoice.amount_due > 0 && (
                     <p className="text-lg font-bold text-red-600 mt-2">
