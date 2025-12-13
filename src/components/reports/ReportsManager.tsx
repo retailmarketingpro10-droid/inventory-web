@@ -65,6 +65,12 @@ interface ReportSummary {
   netPurchase?: number;
   saleReturns?: number;
   netSales?: number;
+  openingStock?: number;
+  closingStock?: number;
+  cogs?: number;
+  indirectExpenses?: number;
+  indirectIncome?: number;
+  salesDiscounts?: number;
 }
 
 const REPORT_TYPES = [
@@ -236,6 +242,28 @@ export const ReportsManager: React.FC = () => {
             salesInvoiceItems = itemsData || [];
           }
 
+          // Fetch purchase invoice items for closing stock calculation (debits)
+          let purchaseInvoiceItems: any[] = [];
+          const purchaseInvoiceIds = (purchaseInvoices || []).map(inv => inv.id);
+          if (purchaseInvoiceIds.length > 0) {
+            const { data: purchaseItemsData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', purchaseInvoiceIds);
+            purchaseInvoiceItems = purchaseItemsData || [];
+          }
+
+          // Fetch sale return items (credits - increase stock)
+          let saleReturnItems: any[] = [];
+          const saleReturnIds = (saleReturns || []).map(inv => inv.id);
+          if (saleReturnIds.length > 0) {
+            const { data: returnItemsData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', saleReturnIds);
+            saleReturnItems = returnItemsData || [];
+          }
+
           // Calculate Opening Stock (current inventory cost = sum of current_stock * purchase_price)
           const { data: products, error: productsError } = await supabase
             .from('products')
@@ -283,14 +311,22 @@ export const ReportsManager: React.FC = () => {
             return sum + (stock * sellingPrice) + taxAmount;
           }, 0);
 
-          // Calculate closing stock: Opening Stock Value - Sales Value
-          // For each product: closing stock value = (opening stock - quantity sold) * selling price
+          // Calculate closing stock using ledger formula: Opening - Debit + Credit = Closing
+          // For inventory: Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal) = Closing
           let closingStockValue = 0;
           (products || []).forEach(product => {
             const openingStock = product.current_stock || 0;
-            const sellingPrice = product.selling_price || 0;
+            const purchasePrice = product.purchase_price || 0;
             
-            // Find total quantity sold for this product
+            // Find total quantity purchased (debits) for this product in the period
+            let quantityPurchased = 0;
+            (purchaseInvoiceItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                quantityPurchased += item.quantity || 0;
+              }
+            });
+            
+            // Find total quantity sold (credits) for this product in the period
             let quantitySold = 0;
             (salesInvoiceItems || []).forEach(item => {
               if (item.product_id === product.id) {
@@ -298,11 +334,20 @@ export const ReportsManager: React.FC = () => {
               }
             });
             
-            // Calculate closing stock quantity
-            const closingStockQty = Math.max(0, openingStock - quantitySold);
+            // Find total quantity returned (credit reversal - increases stock)
+            let salesReturnQty = 0;
+            (saleReturnItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                salesReturnQty += item.quantity || 0;
+              }
+            });
             
-            // Calculate closing stock value
-            closingStockValue += closingStockQty * sellingPrice;
+            // Calculate closing stock quantity using ledger formula
+            // Closing = Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal)
+            const closingStockQty = Math.max(0, openingStock + quantityPurchased - quantitySold + salesReturnQty);
+            
+            // Calculate closing stock value at purchase price (cost basis)
+            closingStockValue += closingStockQty * purchasePrice;
           });
 
           // Use closingStockValue for the report
@@ -490,7 +535,13 @@ export const ReportsManager: React.FC = () => {
             grossProfit,
             netProfit,
             saleReturns: totalSaleReturns,
-            purchaseReturns: totalPurchaseReturns
+            purchaseReturns: totalPurchaseReturns,
+            openingStock: openingStockCost,
+            closingStock: closingStock,
+            cogs: effectiveCOGS,
+            indirectExpenses: totalIndirectExpenses,
+            indirectIncome: indirectIncome,
+            salesDiscounts: salesDiscounts
           };
           break;
         }
@@ -2552,6 +2603,9 @@ export const ReportsManager: React.FC = () => {
                         {formatIndianCurrency(Math.abs(summary.grossProfit))}
                         {summary.grossProfit < 0 && ' -'}
                       </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Net Sales - COGS
+                      </p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Net Profit</p>
@@ -2559,6 +2613,43 @@ export const ReportsManager: React.FC = () => {
                         {formatIndianCurrency(Math.abs(summary.netProfit))}
                         {summary.netProfit < 0 && ' -'}
                       </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Gross Profit - Indirect Exp + Indirect Income
+                      </p>
+                    </div>
+                    
+                    {/* Demo Calculation Breakdown */}
+                    <div className="col-span-2 md:col-span-4 mt-4 p-4 bg-muted/50 rounded-lg">
+                      <p className="text-sm font-semibold mb-3">Calculation Breakdown:</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                        <div className="space-y-1">
+                          <p className="font-semibold text-sm mb-2">Cost of Goods Sold (COGS):</p>
+                          <p className="text-muted-foreground">Opening Stock: {formatIndianCurrency((summary as any).openingStock || 0)}</p>
+                          <p className="text-muted-foreground">+ Net Purchases: {formatIndianCurrency(summary.totalPurchases || 0)}</p>
+                          <p className="text-muted-foreground">- Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}</p>
+                          <p className="font-semibold mt-2 text-green-600">= COGS: {formatIndianCurrency((summary as any).cogs || 0)}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="font-semibold text-sm mb-2">Gross Profit:</p>
+                          <p className="text-muted-foreground">Net Sales: {formatIndianCurrency(summary.totalSales || 0)}</p>
+                          <p className="text-muted-foreground">- COGS: {formatIndianCurrency((summary as any).cogs || 0)}</p>
+                          <p className="font-semibold mt-2 text-green-600">= Gross Profit: {formatIndianCurrency(summary.grossProfit || 0)}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="font-semibold text-sm mb-2">Net Profit:</p>
+                          <p className="text-muted-foreground">Gross Profit: {formatIndianCurrency(summary.grossProfit || 0)}</p>
+                          <p className="text-muted-foreground">- Indirect Expenses: {formatIndianCurrency((summary as any).indirectExpenses || 0)}</p>
+                          <p className="text-muted-foreground">  (Sales Discounts: {formatIndianCurrency((summary as any).salesDiscounts || 0)})</p>
+                          <p className="text-muted-foreground">+ Indirect Income: {formatIndianCurrency((summary as any).indirectIncome || 0)}</p>
+                          <p className="font-semibold mt-2 text-green-600">= Net Profit: {formatIndianCurrency(summary.netProfit || 0)}</p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="font-semibold text-sm mb-2">Closing Stock Formula:</p>
+                          <p className="text-muted-foreground">Opening - Debit + Credit = Closing</p>
+                          <p className="text-muted-foreground text-xs mt-1">(Opening + Purchases - Sales + Sales Returns)</p>
+                          <p className="text-muted-foreground text-xs mt-2">Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}</p>
+                        </div>
+                      </div>
                     </div>
                   </>
                 )}
