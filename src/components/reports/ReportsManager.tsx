@@ -264,7 +264,18 @@ export const ReportsManager: React.FC = () => {
             saleReturnItems = returnItemsData || [];
           }
 
-          // Calculate Opening Stock (current inventory cost = sum of current_stock * purchase_price)
+          // Fetch purchase return items (debits - decrease stock)
+          let purchaseReturnItems: any[] = [];
+          const purchaseReturnIds = (purchaseReturns || []).map(inv => inv.id);
+          if (purchaseReturnIds.length > 0) {
+            const { data: purchaseReturnItemsData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', purchaseReturnIds);
+            purchaseReturnItems = purchaseReturnItemsData || [];
+          }
+
+          // Fetch all products
           const { data: products, error: productsError } = await supabase
             .from('products')
             .select('id, current_stock, purchase_price, selling_price, gst_rate')
@@ -274,12 +285,56 @@ export const ReportsManager: React.FC = () => {
             console.error('Error fetching products for opening stock:', productsError);
           }
 
-          // Calculate opening stock (inventory cost without tax)
-          const openingStockCost = (products || []).reduce((sum, product) => {
-            const stock = product.current_stock || 0;
+          // Calculate Opening Stock at the beginning of the period (dateFrom)
+          // Opening Stock = Current Stock - Purchases + Sales - Sales Returns + Purchase Returns
+          // This reverses all transactions in the period to get the opening balance
+          // Note: Opening stock remains constant for the period and doesn't change with sales entries
+          // Sales entries only affect closing stock, not opening stock (as per Tally behavior)
+          
+          let openingStockValue = 0;
+          (products || []).forEach(product => {
+            const currentStock = product.current_stock || 0;
             const purchasePrice = product.purchase_price || 0;
-            return sum + (stock * purchasePrice);
-          }, 0);
+            
+            // Find net quantity changes in the period for this product
+            let quantityPurchasedInPeriod = 0;
+            (purchaseInvoiceItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                quantityPurchasedInPeriod += item.quantity || 0;
+              }
+            });
+            
+            let quantitySoldInPeriod = 0;
+            (salesInvoiceItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                quantitySoldInPeriod += item.quantity || 0;
+              }
+            });
+            
+            let salesReturnQtyInPeriod = 0;
+            (saleReturnItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                salesReturnQtyInPeriod += item.quantity || 0;
+              }
+            });
+            
+            let purchaseReturnQtyInPeriod = 0;
+            (purchaseReturnItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                purchaseReturnQtyInPeriod += item.quantity || 0;
+              }
+            });
+            
+            // Calculate opening stock: Current Stock - Purchases + Sales - Sales Returns + Purchase Returns
+            // This reverses period transactions to get opening balance at start of period
+            // Opening stock remains constant; only closing stock changes with transactions
+            const openingStockQty = Math.max(0, currentStock - quantityPurchasedInPeriod + quantitySoldInPeriod - salesReturnQtyInPeriod + purchaseReturnQtyInPeriod);
+            
+            // Calculate opening stock value at purchase price (cost basis)
+            openingStockValue += openingStockQty * purchasePrice;
+          });
+
+          const openingStockCost = openingStockValue;
 
           // Calculate purchases and returns
           const totalPurchases = purchaseInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
@@ -312,39 +367,49 @@ export const ReportsManager: React.FC = () => {
           }, 0);
 
           // Calculate closing stock using ledger formula: Opening - Debit + Credit = Closing
-          // For inventory: Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal) = Closing
+          // For inventory: Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal) - Purchase Returns (debit reversal) = Closing
+          // Note: Opening stock remains constant; sales entries reduce closing stock, not opening stock (as per Tally behavior)
           let closingStockValue = 0;
           (products || []).forEach(product => {
-            const openingStock = product.current_stock || 0;
             const purchasePrice = product.purchase_price || 0;
+            const currentStock = product.current_stock || 0;
             
-            // Find total quantity purchased (debits) for this product in the period
-            let quantityPurchased = 0;
+            // Find transactions in the period
+            let quantityPurchasedInPeriod = 0;
             (purchaseInvoiceItems || []).forEach(item => {
               if (item.product_id === product.id) {
-                quantityPurchased += item.quantity || 0;
+                quantityPurchasedInPeriod += item.quantity || 0;
               }
             });
             
-            // Find total quantity sold (credits) for this product in the period
-            let quantitySold = 0;
+            let quantitySoldInPeriod = 0;
             (salesInvoiceItems || []).forEach(item => {
               if (item.product_id === product.id) {
-                quantitySold += item.quantity || 0;
+                quantitySoldInPeriod += item.quantity || 0;
               }
             });
             
-            // Find total quantity returned (credit reversal - increases stock)
-            let salesReturnQty = 0;
+            let salesReturnQtyInPeriod = 0;
             (saleReturnItems || []).forEach(item => {
               if (item.product_id === product.id) {
-                salesReturnQty += item.quantity || 0;
+                salesReturnQtyInPeriod += item.quantity || 0;
               }
             });
             
+            let purchaseReturnQtyInPeriod = 0;
+            (purchaseReturnItems || []).forEach(item => {
+              if (item.product_id === product.id) {
+                purchaseReturnQtyInPeriod += item.quantity || 0;
+              }
+            });
+            
+            // Opening stock at beginning of period (constant, doesn't change with sales)
+            const openingStockQty = Math.max(0, currentStock - quantityPurchasedInPeriod + quantitySoldInPeriod - salesReturnQtyInPeriod + purchaseReturnQtyInPeriod);
+            
             // Calculate closing stock quantity using ledger formula
-            // Closing = Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal)
-            const closingStockQty = Math.max(0, openingStock + quantityPurchased - quantitySold + salesReturnQty);
+            // Closing = Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal) - Purchase Returns (debit reversal)
+            // Opening stock remains constant; only closing stock changes with transactions
+            const closingStockQty = Math.max(0, openingStockQty + quantityPurchasedInPeriod - quantitySoldInPeriod + salesReturnQtyInPeriod - purchaseReturnQtyInPeriod);
             
             // Calculate closing stock value at purchase price (cost basis)
             closingStockValue += closingStockQty * purchasePrice;
