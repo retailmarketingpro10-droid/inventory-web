@@ -282,20 +282,76 @@ export const ProductsManager = () => {
     if (!productToDelete) return;
     
     try {
+      // Check if product is used in any invoices or purchase orders
+      const { count: invoiceCount, error: invoiceError } = await supabase
+        .from('invoice_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('product_id', productToDelete);
+
+      const { count: poCount, error: poError } = await supabase
+        .from('purchase_order_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('product_id', productToDelete);
+
+      if (invoiceError) throw invoiceError;
+      if (poError) throw poError;
+
+      // If product is used, show helpful error message
+      if ((invoiceCount && invoiceCount > 0) || (poCount && poCount > 0)) {
+        let errorMessage = "Cannot delete product because it is used in ";
+        const usedIn = [];
+        
+        if (invoiceCount && invoiceCount > 0) {
+          usedIn.push(`${invoiceCount} invoice(s)`);
+        }
+        if (poCount && poCount > 0) {
+          usedIn.push(`${poCount} purchase order(s)`);
+        }
+        
+        errorMessage += usedIn.join(" and ") + ". ";
+        errorMessage += "Products that are used in invoices or purchase orders cannot be deleted to maintain data integrity.";
+        
+        toast({
+          title: "Cannot Delete Product",
+          description: errorMessage,
+          variant: "destructive"
+        });
+        setShowDeleteDialog(false);
+        setProductToDelete(null);
+        return;
+      }
+
+      // If no dependencies, proceed with deletion
       const { error } = await supabase
         .from('products')
         .delete()
         .eq('id', productToDelete);
 
-      if (error) throw error;
+      if (error) {
+        // Handle specific error codes
+        if (error.code === '23503') {
+          throw new Error("Cannot delete product because it is referenced in invoices or purchase orders. Please remove all references first.");
+        }
+        throw error;
+      }
+
       toast({ title: "Success", description: "Product deleted successfully" });
       fetchProducts();
       setShowDeleteDialog(false);
       setProductToDelete(null);
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Delete product error:', error);
+      let errorMessage = "Failed to delete product";
+      
+      if (error.code === '23503' || error.message?.includes('23503')) {
+        errorMessage = "Cannot delete product because it is used in invoices or purchase orders. Products referenced in transactions cannot be deleted to maintain data integrity.";
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Error",
-        description: "Failed to delete product",
+        description: errorMessage,
         variant: "destructive"
       });
     }
