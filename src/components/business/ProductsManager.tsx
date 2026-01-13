@@ -58,6 +58,7 @@ export const ProductsManager = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [productToDelete, setProductToDelete] = useState<string | null>(null);
+  const [productUsageInfo, setProductUsageInfo] = useState<{invoiceCount: number, poCount: number} | null>(null);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -275,6 +276,28 @@ export const ProductsManager = () => {
 
   const handleDelete = async (id: string) => {
     setProductToDelete(id);
+    
+    // Check usage before showing dialog
+    try {
+      const { count: invoiceCount } = await supabase
+        .from('invoice_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('product_id', id);
+
+      const { count: poCount } = await supabase
+        .from('purchase_order_items')
+        .select('*', { count: 'exact', head: true })
+        .eq('product_id', id);
+
+      setProductUsageInfo({
+        invoiceCount: invoiceCount || 0,
+        poCount: poCount || 0
+      });
+    } catch (error) {
+      console.error('Error checking product usage:', error);
+      setProductUsageInfo({ invoiceCount: 0, poCount: 0 });
+    }
+    
     setShowDeleteDialog(true);
   };
 
@@ -282,46 +305,37 @@ export const ProductsManager = () => {
     if (!productToDelete) return;
     
     try {
-      // Check if product is used in any invoices or purchase orders
-      const { count: invoiceCount, error: invoiceError } = await supabase
-        .from('invoice_items')
-        .select('*', { count: 'exact', head: true })
-        .eq('product_id', productToDelete);
-
-      const { count: poCount, error: poError } = await supabase
-        .from('purchase_order_items')
-        .select('*', { count: 'exact', head: true })
-        .eq('product_id', productToDelete);
-
-      if (invoiceError) throw invoiceError;
-      if (poError) throw poError;
-
-      // If product is used, show helpful error message
-      if ((invoiceCount && invoiceCount > 0) || (poCount && poCount > 0)) {
-        let errorMessage = "Cannot delete product because it is used in ";
-        const usedIn = [];
-        
-        if (invoiceCount && invoiceCount > 0) {
-          usedIn.push(`${invoiceCount} invoice(s)`);
-        }
-        if (poCount && poCount > 0) {
-          usedIn.push(`${poCount} purchase order(s)`);
+      // If product is used, first set product_id to NULL in related records
+      // This handles cases where ON DELETE SET NULL might not be working
+      if (productUsageInfo && (productUsageInfo.invoiceCount > 0 || productUsageInfo.poCount > 0)) {
+        // Set product_id to NULL in invoice_items
+        if (productUsageInfo.invoiceCount > 0) {
+          const { error: invoiceError } = await supabase
+            .from('invoice_items')
+            .update({ product_id: null })
+            .eq('product_id', productToDelete);
+          
+          if (invoiceError) {
+            console.warn('Failed to update invoice_items:', invoiceError);
+            // Continue anyway - database constraint might handle it
+          }
         }
         
-        errorMessage += usedIn.join(" and ") + ". ";
-        errorMessage += "Products that are used in invoices or purchase orders cannot be deleted to maintain data integrity.";
-        
-        toast({
-          title: "Cannot Delete Product",
-          description: errorMessage,
-          variant: "destructive"
-        });
-        setShowDeleteDialog(false);
-        setProductToDelete(null);
-        return;
+        // Set product_id to NULL in purchase_order_items
+        if (productUsageInfo.poCount > 0) {
+          const { error: poError } = await supabase
+            .from('purchase_order_items')
+            .update({ product_id: null })
+            .eq('product_id', productToDelete);
+          
+          if (poError) {
+            console.warn('Failed to update purchase_order_items:', poError);
+            // Continue anyway - database constraint might handle it
+          }
+        }
       }
 
-      // If no dependencies, proceed with deletion
+      // Now attempt deletion
       const { error } = await supabase
         .from('products')
         .delete()
@@ -330,7 +344,10 @@ export const ProductsManager = () => {
       if (error) {
         // Handle specific error codes
         if (error.code === '23503') {
-          throw new Error("Cannot delete product because it is referenced in invoices or purchase orders. Please remove all references first.");
+          // Foreign key constraint violation
+          throw new Error("Cannot delete product due to database constraints. The product may be referenced in a way that prevents deletion. Please contact support.");
+        } else if (error.code === '42501') {
+          throw new Error("Permission denied. You don't have permission to delete this product.");
         }
         throw error;
       }
@@ -339,12 +356,15 @@ export const ProductsManager = () => {
       fetchProducts();
       setShowDeleteDialog(false);
       setProductToDelete(null);
+      setProductUsageInfo(null);
     } catch (error: any) {
       console.error('Delete product error:', error);
       let errorMessage = "Failed to delete product";
       
       if (error.code === '23503' || error.message?.includes('23503')) {
-        errorMessage = "Cannot delete product because it is used in invoices or purchase orders. Products referenced in transactions cannot be deleted to maintain data integrity.";
+        errorMessage = "Cannot delete product due to database constraints. The product may be referenced in invoices or purchase orders in a way that prevents deletion. Please contact support if this issue persists.";
+      } else if (error.code === '42501') {
+        errorMessage = "Permission denied. You don't have permission to delete this product.";
       } else if (error.message) {
         errorMessage = error.message;
       }
@@ -937,12 +957,36 @@ export const ProductsManager = () => {
       </Dialog>
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialog open={showDeleteDialog} onOpenChange={(open) => {
+        setShowDeleteDialog(open);
+        if (!open) {
+          setProductToDelete(null);
+          setProductUsageInfo(null);
+        }
+      }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Product</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to delete this product? This action cannot be undone.
+              {productUsageInfo && (productUsageInfo.invoiceCount > 0 || productUsageInfo.poCount > 0) && (
+                <div className="mt-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                  <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                    ⚠️ Warning: This product is currently used in:
+                  </p>
+                  <ul className="mt-2 text-sm text-yellow-700 dark:text-yellow-300 list-disc list-inside">
+                    {productUsageInfo.invoiceCount > 0 && (
+                      <li>{productUsageInfo.invoiceCount} invoice(s)</li>
+                    )}
+                    {productUsageInfo.poCount > 0 && (
+                      <li>{productUsageInfo.poCount} purchase order(s)</li>
+                    )}
+                  </ul>
+                  <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
+                    The product will be removed from these records, but the invoice/purchase order data will be preserved.
+                  </p>
+                </div>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
