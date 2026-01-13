@@ -17,6 +17,8 @@ interface Invoice {
   subtotal: number;
   tax_amount: number;
   total_amount: number;
+  discount_amount?: number;
+  discount_percentage?: number;
   notes: string | null;
   suppliers?: {
     company_name: string;
@@ -239,42 +241,87 @@ export const InvoicePDF: React.FC<InvoicePDFProps> = ({
       {/* Totals */}
       <View style={styles.totalsSection}>
         <View style={styles.totalRow}>
-          <Text>Subtotal:</Text>
+          <Text>Value of Goods (Original Price):</Text>
           <Text>{formatIndianCurrency(invoice.subtotal, false)}</Text>
         </View>
+        {(() => {
+          let totalDiscount = invoice.discount_amount || 0;
+          if (invoice.discount_percentage && invoice.discount_percentage > 0) {
+            const remainingAfterFlat = Math.max(0, invoice.subtotal - totalDiscount);
+            totalDiscount += (remainingAfterFlat * invoice.discount_percentage) / 100;
+          }
+          const taxableValue = Math.max(0, invoice.subtotal - totalDiscount);
+          
+          return totalDiscount > 0 ? (
+            <>
+              <View style={styles.totalRow}>
+                <Text>
+                  (Less) Discount {invoice.discount_percentage 
+                    ? `@ ${invoice.discount_percentage.toFixed(2)}%`
+                    : ''}:
+                </Text>
+                <Text>({formatIndianCurrency(totalDiscount, false)})</Text>
+              </View>
+              <View style={styles.totalRow}>
+                <Text>Transaction Value (Taxable Value):</Text>
+                <Text>{formatIndianCurrency(taxableValue, false)}</Text>
+              </View>
+            </>
+          ) : null;
+        })()}
         {gstBreakdown && (gstBreakdown.cgst > 0 || gstBreakdown.sgst > 0 || gstBreakdown.igst > 0) ? (
           <>
-            {gstBreakdown.cgst > 0 && (
-              <View style={styles.totalRow}>
-                <Text>CGST:</Text>
-                <Text>{formatIndianCurrency(gstBreakdown.cgst, false)}</Text>
-              </View>
-            )}
-            {gstBreakdown.sgst > 0 && (
-              <View style={styles.totalRow}>
-                <Text>SGST:</Text>
-                <Text>{formatIndianCurrency(gstBreakdown.sgst, false)}</Text>
-              </View>
-            )}
+            {gstBreakdown.cgst > 0 && (() => {
+              let taxableValue = invoice.subtotal;
+              if (invoice.discount_amount || invoice.discount_percentage) {
+                let totalDiscount = invoice.discount_amount || 0;
+                if (invoice.discount_percentage && invoice.discount_percentage > 0) {
+                  const remainingAfterFlat = Math.max(0, invoice.subtotal - totalDiscount);
+                  totalDiscount += (remainingAfterFlat * invoice.discount_percentage) / 100;
+                }
+                taxableValue = Math.max(0, invoice.subtotal - totalDiscount);
+              }
+              const cgstRate = taxableValue > 0 ? ((gstBreakdown.cgst / taxableValue) * 100).toFixed(0) : '0';
+              return (
+                <View style={styles.totalRow}>
+                  <Text>Add: CGST @ {cgstRate}%:</Text>
+                  <Text>{formatIndianCurrency(gstBreakdown.cgst, false)}</Text>
+                </View>
+              );
+            })()}
+            {gstBreakdown.sgst > 0 && (() => {
+              let taxableValue = invoice.subtotal;
+              if (invoice.discount_amount || invoice.discount_percentage) {
+                let totalDiscount = invoice.discount_amount || 0;
+                if (invoice.discount_percentage && invoice.discount_percentage > 0) {
+                  const remainingAfterFlat = Math.max(0, invoice.subtotal - totalDiscount);
+                  totalDiscount += (remainingAfterFlat * invoice.discount_percentage) / 100;
+                }
+                taxableValue = Math.max(0, invoice.subtotal - totalDiscount);
+              }
+              const sgstRate = taxableValue > 0 ? ((gstBreakdown.sgst / taxableValue) * 100).toFixed(0) : '0';
+              return (
+                <View style={styles.totalRow}>
+                  <Text>Add: SGST @ {sgstRate}%:</Text>
+                  <Text>{formatIndianCurrency(gstBreakdown.sgst, false)}</Text>
+                </View>
+              );
+            })()}
             {gstBreakdown.igst > 0 && (
               <View style={styles.totalRow}>
-                <Text>IGST:</Text>
+                <Text>Add: IGST:</Text>
                 <Text>{formatIndianCurrency(gstBreakdown.igst, false)}</Text>
               </View>
             )}
-            <View style={styles.totalRow}>
-              <Text>Total Tax:</Text>
-              <Text>{formatIndianCurrency(gstBreakdown.total_gst || invoice.tax_amount, false)}</Text>
-            </View>
           </>
         ) : (
           <View style={styles.totalRow}>
-            <Text>Tax Amount:</Text>
+            <Text>Add: Tax Amount:</Text>
             <Text>{formatIndianCurrency(invoice.tax_amount, false)}</Text>
           </View>
         )}
         <View style={[styles.totalRow, styles.grandTotal]}>
-          <Text style={styles.totalLabel}>Total Amount:</Text>
+          <Text style={styles.totalLabel}>Total Invoice Value:</Text>
           <Text style={styles.totalLabel}>{formatIndianCurrency(invoice.total_amount, false)}</Text>
         </View>
       </View>

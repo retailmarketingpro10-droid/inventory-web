@@ -532,16 +532,29 @@ export const InvoiceManager = () => {
         sgst = taxAmount / 2;
       }
     } else {
-      // Apply tax on individual line items (original behavior)
+      // Apply tax on individual line items
+      // IMPORTANT: Apply discount proportionally to each line item BEFORE calculating tax
       lineItems.forEach(item => {
         const lineTotal = item.quantity * item.unit_price;
+        
+        // Calculate proportional discount for this line item
+        // Distribute discount based on each item's contribution to subtotal
+        let itemDiscount = 0;
+        if (subtotal > 0 && discountAmount > 0) {
+          const itemProportion = lineTotal / subtotal;
+          itemDiscount = discountAmount * itemProportion;
+        }
+        
+        // Apply discount to line item total
+        const lineTotalAfterDiscount = Math.max(0, lineTotal - itemDiscount);
         
         // Calculate GST based on forceIGST flag or state difference
         const entityState = formData.entity_id ? 
           (businessEntities.find(e => e.id === formData.entity_id)?.state || '27') : '27';
         const isInterState = forceIGST || (entityState !== companyState && entityState && companyState);
         
-        const gstAmount = (lineTotal * item.gst_rate) / 100;
+        // Calculate tax on discounted amount (not original amount)
+        const gstAmount = (lineTotalAfterDiscount * item.gst_rate) / 100;
         taxAmount += gstAmount;
         
         if (isInterState) {
@@ -1402,7 +1415,19 @@ export const InvoiceManager = () => {
   };
 
   const removeLineItem = (index: number) => {
+    // If only one item, clear it instead of removing
+    if (lineItems.length === 1) {
+      setLineItems([{
+        product_id: undefined,
+        description: "",
+        quantity: 1,
+        unit_price: 0,
+        gst_rate: 18,
+        max_quantity: undefined
+      }]);
+    } else {
     setLineItems(lineItems.filter((_, i) => i !== index));
+    }
   };
 
   const updateLineItem = (index: number, field: string, value: any) => {
@@ -2223,11 +2248,9 @@ export const InvoiceManager = () => {
                       <p className="text-sm font-medium pt-[9px]">{formatIndianCurrency(item.quantity * item.unit_price)}</p>
                     </div>
                     <div className="col-span-1 flex items-start">
-                      {lineItems.length > 1 && (
                         <Button type="button" variant="ghost" size="sm" onClick={() => removeLineItem(index)} className="mt-[29px]">
                           <Trash2 className="w-4 h-4" />
                         </Button>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -2308,25 +2331,67 @@ export const InvoiceManager = () => {
               <div className="border-t pt-4">
                 <div className="flex justify-end space-y-2">
                   <div className="text-right">
-                    <p>Subtotal: {formatIndianCurrency(calculateTotals().subtotal)}</p>
+                    <p>Value of Goods (Original Price): {formatIndianCurrency(calculateTotals().subtotal)}</p>
                     {calculateTotals().discountAmount > 0 && (
-                      <p className="text-sm text-green-600">
-                        Discount {formData.discount_amount > 0 && formData.discount_percentage > 0 
-                          ? `(₹${formatIndianCurrency(formData.discount_amount)} + ${formData.discount_percentage.toFixed(2)}%)`
-                          : formData.discount_percentage > 0 
-                          ? `(${formData.discount_percentage.toFixed(2)}%)`
-                          : '(Amount)'}: -{formatIndianCurrency(calculateTotals().discountAmount)}
-                      </p>
+                      <>
+                        <p className="text-sm text-green-600">
+                          (Less) Discount {formData.discount_percentage > 0 
+                            ? `@ ${formData.discount_percentage.toFixed(2)}%`
+                            : ''}: ({formatIndianCurrency(calculateTotals().discountAmount)})
+                        </p>
+                        <p>Transaction Value (Taxable Value): {formatIndianCurrency(calculateTotals().subtotalAfterDiscount)}</p>
+                      </>
+                    )}
+                    {!calculateTotals().discountAmount && (
+                      <p>Transaction Value (Taxable Value): {formatIndianCurrency(calculateTotals().subtotal)}</p>
                     )}
                     {applyTaxOnSubtotal && (
-                      <p className="text-sm text-muted-foreground">
-                        Tax ({subtotalTaxRate}%): {formatIndianCurrency(calculateTotals().taxAmount)}
-                      </p>
+                      <>
+                        {calculateTotals().cgst > 0 && (
+                          <p className="text-sm text-muted-foreground">
+                            Add: CGST @ {calculateTotals().subtotalAfterDiscount > 0 
+                              ? ((calculateTotals().cgst / calculateTotals().subtotalAfterDiscount) * 100).toFixed(0)
+                              : '0'}%: {formatIndianCurrency(calculateTotals().cgst)}
+                          </p>
+                        )}
+                        {calculateTotals().sgst > 0 && (
+                          <p className="text-sm text-muted-foreground">
+                            Add: SGST @ {calculateTotals().subtotalAfterDiscount > 0 
+                              ? ((calculateTotals().sgst / calculateTotals().subtotalAfterDiscount) * 100).toFixed(0)
+                              : '0'}%: {formatIndianCurrency(calculateTotals().sgst)}
+                          </p>
+                        )}
+                        {calculateTotals().igst > 0 && (
+                          <p className="text-sm text-muted-foreground">
+                            Add: IGST: {formatIndianCurrency(calculateTotals().igst)}
+                          </p>
+                        )}
+                      </>
                     )}
                     {!applyTaxOnSubtotal && (
-                      <p>Tax: {formatIndianCurrency(calculateTotals().taxAmount)}</p>
+                      <>
+                        {calculateTotals().cgst > 0 && (
+                          <p className="text-sm text-muted-foreground">
+                            Add: CGST @ {calculateTotals().subtotalAfterDiscount > 0 
+                              ? ((calculateTotals().cgst / calculateTotals().subtotalAfterDiscount) * 100).toFixed(0)
+                              : '0'}%: {formatIndianCurrency(calculateTotals().cgst)}
+                          </p>
+                        )}
+                        {calculateTotals().sgst > 0 && (
+                          <p className="text-sm text-muted-foreground">
+                            Add: SGST @ {calculateTotals().subtotalAfterDiscount > 0 
+                              ? ((calculateTotals().sgst / calculateTotals().subtotalAfterDiscount) * 100).toFixed(0)
+                              : '0'}%: {formatIndianCurrency(calculateTotals().sgst)}
+                          </p>
+                        )}
+                        {calculateTotals().igst > 0 && (
+                          <p className="text-sm text-muted-foreground">
+                            Add: IGST: {formatIndianCurrency(calculateTotals().igst)}
+                          </p>
+                        )}
+                      </>
                     )}
-                    <p className="font-bold">Total: {formatIndianCurrency(calculateTotals().total)}</p>
+                    <p className="font-bold">Total Invoice Value: {formatIndianCurrency(calculateTotals().total)}</p>
                   </div>
                 </div>
               </div>
@@ -2623,24 +2688,73 @@ export const InvoiceManager = () => {
               
               <div className="border-t pt-4">
                 <div className="space-y-1 text-right">
-                  <p>Subtotal: {formatIndianCurrency(selectedInvoice.subtotal)}</p>
+                  <p>Value of Goods (Original Price): {formatIndianCurrency(selectedInvoice.subtotal)}</p>
+                  {selectedInvoice.discount_amount || selectedInvoice.discount_percentage ? (() => {
+                    let totalDiscount = selectedInvoice.discount_amount || 0;
+                    if (selectedInvoice.discount_percentage && selectedInvoice.discount_percentage > 0) {
+                      const remainingAfterFlat = Math.max(0, selectedInvoice.subtotal - totalDiscount);
+                      totalDiscount += (remainingAfterFlat * selectedInvoice.discount_percentage) / 100;
+                    }
+                    const taxableValue = Math.max(0, selectedInvoice.subtotal - totalDiscount);
+                    return (
+                      <>
+                        <p className="text-sm text-green-600">
+                          (Less) Discount {selectedInvoice.discount_percentage 
+                            ? `@ ${selectedInvoice.discount_percentage.toFixed(2)}%`
+                            : ''}: ({formatIndianCurrency(totalDiscount)})
+                        </p>
+                        <p>Transaction Value (Taxable Value): {formatIndianCurrency(taxableValue)}</p>
+                      </>
+                    );
+                  })() : (
+                    <p>Transaction Value (Taxable Value): {formatIndianCurrency(selectedInvoice.subtotal)}</p>
+                  )}
                   {invoiceGSTBreakdown && (invoiceGSTBreakdown.cgst > 0 || invoiceGSTBreakdown.sgst > 0 || invoiceGSTBreakdown.igst > 0) ? (
                     <>
-                      {invoiceGSTBreakdown.cgst > 0 && (
-                        <p className="text-sm text-muted-foreground">CGST: {formatIndianCurrency(invoiceGSTBreakdown.cgst)}</p>
-                      )}
-                      {invoiceGSTBreakdown.sgst > 0 && (
-                        <p className="text-sm text-muted-foreground">SGST: {formatIndianCurrency(invoiceGSTBreakdown.sgst)}</p>
-                      )}
+                      {invoiceGSTBreakdown.cgst > 0 && (() => {
+                        let taxableValue = selectedInvoice.subtotal;
+                        if (selectedInvoice.discount_amount || selectedInvoice.discount_percentage) {
+                          let totalDiscount = selectedInvoice.discount_amount || 0;
+                          if (selectedInvoice.discount_percentage && selectedInvoice.discount_percentage > 0) {
+                            const remainingAfterFlat = Math.max(0, selectedInvoice.subtotal - totalDiscount);
+                            totalDiscount += (remainingAfterFlat * selectedInvoice.discount_percentage) / 100;
+                          }
+                          taxableValue = Math.max(0, selectedInvoice.subtotal - totalDiscount);
+                        }
+                        const cgstRate = taxableValue > 0 ? ((invoiceGSTBreakdown.cgst / taxableValue) * 100).toFixed(0) : '0';
+                        return (
+                          <p className="text-sm text-muted-foreground">
+                            Add: CGST @ {cgstRate}%: {formatIndianCurrency(invoiceGSTBreakdown.cgst)}
+                          </p>
+                        );
+                      })()}
+                      {invoiceGSTBreakdown.sgst > 0 && (() => {
+                        let taxableValue = selectedInvoice.subtotal;
+                        if (selectedInvoice.discount_amount || selectedInvoice.discount_percentage) {
+                          let totalDiscount = selectedInvoice.discount_amount || 0;
+                          if (selectedInvoice.discount_percentage && selectedInvoice.discount_percentage > 0) {
+                            const remainingAfterFlat = Math.max(0, selectedInvoice.subtotal - totalDiscount);
+                            totalDiscount += (remainingAfterFlat * selectedInvoice.discount_percentage) / 100;
+                          }
+                          taxableValue = Math.max(0, selectedInvoice.subtotal - totalDiscount);
+                        }
+                        const sgstRate = taxableValue > 0 ? ((invoiceGSTBreakdown.sgst / taxableValue) * 100).toFixed(0) : '0';
+                        return (
+                          <p className="text-sm text-muted-foreground">
+                            Add: SGST @ {sgstRate}%: {formatIndianCurrency(invoiceGSTBreakdown.sgst)}
+                          </p>
+                        );
+                      })()}
                       {invoiceGSTBreakdown.igst > 0 && (
-                        <p className="text-sm text-muted-foreground">IGST: {formatIndianCurrency(invoiceGSTBreakdown.igst)}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Add: IGST: {formatIndianCurrency(invoiceGSTBreakdown.igst)}
+                        </p>
                       )}
-                      <p>Total Tax: {formatIndianCurrency(invoiceGSTBreakdown.total_gst || selectedInvoice.tax_amount)}</p>
                     </>
                   ) : (
-                    <p>Tax: {formatIndianCurrency(selectedInvoice.tax_amount)}</p>
+                    <p>Add: Tax Amount: {formatIndianCurrency(selectedInvoice.tax_amount)}</p>
                   )}
-                  <p className="text-lg font-bold">Total: {formatIndianCurrency(selectedInvoice.total_amount)}</p>
+                  <p className="text-lg font-bold">Total Invoice Value: {formatIndianCurrency(selectedInvoice.total_amount)}</p>
                   {selectedInvoice.amount_due !== undefined && selectedInvoice.amount_due > 0 && (
                     <p className="text-lg font-bold text-red-600 mt-2">
                       Amount Due: {formatIndianCurrency(selectedInvoice.amount_due)}

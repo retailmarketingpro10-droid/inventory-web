@@ -423,19 +423,47 @@ export const ReportsManager: React.FC = () => {
           const transportExpenses = (transportInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
           
           // Calculate sales discounts (indirect expenses)
+          // Include both discount_amount and discount_percentage
           let salesDiscounts = 0;
           (allSalesInvoices || []).forEach(inv => {
+            let invoiceDiscount = 0;
+            const subtotal = inv.subtotal || 0;
+            
+            // Add flat discount amount
             if (inv.discount_amount) {
-              salesDiscounts += inv.discount_amount;
+              invoiceDiscount += inv.discount_amount;
             }
+            
+            // Add percentage discount on remaining amount after flat discount
+            if (inv.discount_percentage && inv.discount_percentage > 0) {
+              const remainingAfterFlat = Math.max(0, subtotal - invoiceDiscount);
+              const percentageDiscount = (remainingAfterFlat * inv.discount_percentage) / 100;
+              invoiceDiscount += percentageDiscount;
+            }
+            
+            salesDiscounts += invoiceDiscount;
           });
           
           // Calculate purchase discounts (indirect income)
+          // Include both discount_amount and discount_percentage
           let purchaseDiscounts = 0;
           (purchaseInvoices || []).forEach(inv => {
+            let invoiceDiscount = 0;
+            const subtotal = inv.subtotal || 0;
+            
+            // Add flat discount amount
             if (inv.discount_amount) {
-              purchaseDiscounts += inv.discount_amount;
+              invoiceDiscount += inv.discount_amount;
             }
+            
+            // Add percentage discount on remaining amount after flat discount
+            if (inv.discount_percentage && inv.discount_percentage > 0) {
+              const remainingAfterFlat = Math.max(0, subtotal - invoiceDiscount);
+              const percentageDiscount = (remainingAfterFlat * inv.discount_percentage) / 100;
+              invoiceDiscount += percentageDiscount;
+            }
+            
+            purchaseDiscounts += invoiceDiscount;
           });
           
           const indirectExpenses = labourExpenses + transportExpenses + salesDiscounts;
