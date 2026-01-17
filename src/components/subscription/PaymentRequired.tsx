@@ -70,7 +70,7 @@ export const PaymentRequired = ({ daysRemaining }: { daysRemaining?: number }) =
             </div>
             <p className="text-sm text-muted-foreground">
               You have completed your 11-month free trial period. To continue using all features, 
-              please renew your subscription for <strong className="text-foreground">₹3,000 annually</strong>.
+              please renew your subscription for <strong className="text-foreground">₹10 annually</strong>.
             </p>
             {daysRemaining !== undefined && daysRemaining < 0 && (
               <p className="text-sm text-destructive font-medium">
@@ -87,15 +87,15 @@ export const PaymentRequired = ({ daysRemaining }: { daysRemaining?: number }) =
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Renewal Amount:</span>
-                <span className="font-bold text-lg text-green-600">{formatIndianCurrency(3000)}</span>
+                <span className="font-bold text-lg text-green-600">{formatIndianCurrency(10)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Validity:</span>
                 <span>12 months from renewal date</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Payment Methods:</span>
-                <span>Bank Transfer, UPI, Credit/Debit Card, Cheque, Cash</span>
+                <span className="text-muted-foreground">Payment Method:</span>
+                <span>PayU (Online Payment)</span>
               </div>
             </div>
           </div>

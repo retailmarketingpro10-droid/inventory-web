@@ -249,7 +249,7 @@ export const SubscriptionManager = () => {
     if (!user?.id) return;
 
     try {
-      const renewalAmount = 3000; // Annual renewal price
+      const renewalAmount = 10; // Annual renewal price (testing amount)
       
       // Calculate end date - use currentSubscription if available, otherwise use userCreatedAt + 11 months
       let currentEndDate: Date;
@@ -672,7 +672,7 @@ export const SubscriptionManager = () => {
                 <strong>Free Trial Period:</strong> All new users receive an <strong>11-month free trial</strong> upon signup with full access to all features.
               </p>
               <p className="text-foreground">
-                <strong>Annual Renewal:</strong> After the trial period expires, the subscription fee is <strong className="text-green-600">₹3,000 per year</strong> to continue using the service.
+                <strong>Annual Renewal:</strong> After the trial period expires, the subscription fee is <strong className="text-green-600">₹10 per year</strong> to continue using the service.
               </p>
               <p className="text-foreground">
                 <strong>Renewal Benefits:</strong> Each renewal extends your subscription for 12 months from the renewal date, giving you continuous access to all inventory management features.
@@ -681,32 +681,10 @@ export const SubscriptionManager = () => {
           </div>
 
           <div className="bg-muted rounded-lg p-4">
-            <h3 className="font-semibold mb-3">Payment Methods</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>Bank Transfer</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>UPI Payment</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>Credit Card</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>Debit Card</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>Cheque</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-600" />
-                <span>Cash</span>
-              </div>
+            <h3 className="font-semibold mb-3">Payment Method</h3>
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <span>PayU (Online Payment)</span>
             </div>
           </div>
 
@@ -728,7 +706,7 @@ export const SubscriptionManager = () => {
               <div className="flex-1">
                 <p className="font-semibold text-warning mb-1">Important Notes</p>
                 <ul className="list-disc list-inside space-y-1 text-sm text-warning/90">
-                  <li>Renewal fee is ₹3,000 (INR) per year, payable annually after the 11-month free trial.</li>
+                  <li>Renewal fee is ₹10 (INR) per year, payable annually after the 11-month free trial.</li>
                   <li>You will receive reminders 30 days before your subscription expires.</li>
                   <li>If your subscription expires, access will be restricted until renewal is completed.</li>
                   <li>For payment assistance or questions, contact: <strong>retailmarketingpro1.0@gmail.com</strong></li>
@@ -739,18 +717,18 @@ export const SubscriptionManager = () => {
         </CardContent>
       </Card>
 
-      {/* Test Payment Button - Always Visible for Testing */}
+      {/* Renewal Button - Always Visible */}
       {!isExpired && !isExpiringSoon && (
         <Card className="border-dashed border-primary/50">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
               <CreditCard className="h-4 w-4" />
-              🧪 Testing Mode - PayU Payment Gateway
+              Renewal - PayU Payment Gateway
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
-              Test the PayU payment integration without affecting your current subscription. This will create a test renewal payment.
+              Renew your subscription using PayU payment gateway. This will create a renewal payment.
             </p>
             <Button 
               variant="outline"
@@ -758,7 +736,7 @@ export const SubscriptionManager = () => {
               className="w-full"
             >
               <CreditCard className="w-4 h-4 mr-2" />
-              Test PayU Payment Gateway
+              Renew Subscription
             </Button>
           </CardContent>
         </Card>
@@ -822,7 +800,7 @@ export const SubscriptionManager = () => {
                   onClick={() => setShowRenewalDialog(true)}
                 >
                   <RefreshCw className="w-4 h-4 mr-2" />
-                  Renew Now (₹3,000)
+                  Renew Now (₹10)
                 </Button>
               </div>
             )}
@@ -840,7 +818,7 @@ export const SubscriptionManager = () => {
                 </div>
                 <p className="text-sm text-warning/80 mt-2">
                   {currentSubscription.subscription_type === 'trial' 
-                    ? `Your 11-month free trial expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''}. Renew now for ₹3,000 annually to continue using the service.`
+                    ? `Your 11-month free trial expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''}. Renew now for ₹10 annually to continue using the service.`
                     : `Your subscription expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''}. Renew now to continue uninterrupted service.`
                   }
                 </p>
@@ -850,7 +828,7 @@ export const SubscriptionManager = () => {
                   onClick={() => setShowRenewalDialog(true)}
                 >
                   <RefreshCw className="w-4 h-4 mr-2" />
-                  Renew Now (₹3,000)
+                  Renew Now (₹10)
                 </Button>
               </div>
             )}
@@ -868,13 +846,12 @@ export const SubscriptionManager = () => {
                 </div>
                 {currentSubscription.subscription_type === 'trial' && (
                   <p className="text-xs text-muted-foreground">
-                    After trial expires, renewal fee is ₹3,000 annually
+                    After trial expires, renewal fee is ₹10 annually
                   </p>
                 )}
                 
-                {/* Test Payment Button */}
+                {/* Renewal Button */}
                 <div className="mt-4 pt-4 border-t border-dashed">
-                  <p className="text-xs text-muted-foreground mb-2">🧪 Testing Mode:</p>
                   <Button 
                     variant="outline"
                     size="sm"
@@ -882,11 +859,8 @@ export const SubscriptionManager = () => {
                     className="w-full"
                   >
                     <CreditCard className="w-4 h-4 mr-2" />
-                    Test PayU Payment Gateway
+                    Renew Subscription
                   </Button>
-                  <p className="text-xs text-muted-foreground mt-1 text-center">
-                    This will create a test payment without affecting your current subscription
-                  </p>
                 </div>
               </div>
             )}
@@ -952,40 +926,18 @@ export const SubscriptionManager = () => {
               <div className="space-y-4">
                 <div className="bg-card border-2 border-primary/20 rounded-lg p-4 text-center">
                   <p className="text-sm text-muted-foreground mb-2">Annual Subscription Fee</p>
-                  <p className="text-4xl font-bold text-primary mb-1">{formatIndianCurrency(3000)}</p>
+                  <p className="text-4xl font-bold text-primary mb-1">{formatIndianCurrency(10)}</p>
                   <p className="text-xs text-muted-foreground">Payable after 11-month free trial expires</p>
                 </div>
 
                 <div>
                   <h4 className="font-semibold mb-3 flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-green-600" />
-                    Accepted Payment Methods
+                    Payment Method
                   </h4>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-                    <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
-                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                      <span>Bank Transfer</span>
-                    </div>
-                    <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
-                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                      <span>UPI Payment</span>
-                    </div>
-                    <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
-                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                      <span>Credit Card</span>
-                    </div>
-                    <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
-                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                      <span>Debit Card</span>
-                    </div>
-                    <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
-                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                      <span>Cheque</span>
-                    </div>
-                    <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
-                      <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
-                      <span>Cash</span>
-                    </div>
+                  <div className="flex items-center gap-2 bg-card border rounded-lg p-3">
+                    <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
+                    <span>PayU (Online Payment)</span>
                   </div>
                 </div>
 
@@ -1105,7 +1057,7 @@ export const SubscriptionManager = () => {
           <DialogHeader>
             <DialogTitle>Renew Subscription</DialogTitle>
             <DialogDescription>
-              Annual renewal fee: <span className="font-bold text-lg">{formatIndianCurrency(3000)}</span>
+              Annual renewal fee: <span className="font-bold text-lg">{formatIndianCurrency(10)}</span>
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -1119,13 +1071,7 @@ export const SubscriptionManager = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="payu">PayU (Online Payment) - Recommended</SelectItem>
-                  <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="upi">UPI</SelectItem>
-                  <SelectItem value="credit_card">Credit Card</SelectItem>
-                  <SelectItem value="debit_card">Debit Card</SelectItem>
-                  <SelectItem value="cheque">Cheque</SelectItem>
-                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="payu">PayU (Online Payment)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1167,7 +1113,7 @@ export const SubscriptionManager = () => {
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between">
                   <span>Renewal Amount:</span>
-                  <span className="font-bold">{formatIndianCurrency(3000)}</span>
+                  <span className="font-bold">{formatIndianCurrency(10)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span>New End Date:</span>
@@ -1205,7 +1151,7 @@ export const SubscriptionManager = () => {
       {/* PayU Checkout - Auto-redirects to PayU */}
       {showPayUCheckout && user && paymentTransactionId && (
         <PayUCheckout
-          amount={3000}
+          amount={10}
           transactionId={paymentTransactionId}
           userEmail={user.email || ''}
           userName={user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'}
