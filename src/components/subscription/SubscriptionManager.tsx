@@ -1156,6 +1156,7 @@ export const SubscriptionManager = () => {
           userEmail={user.email || ''}
           userName={user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'}
           userPhone={user.user_metadata?.phone || user.phone || '0000000000'}
+          userId={user.id}
           onSuccess={() => setShowPayUCheckout(false)}
           onFailure={() => setShowPayUCheckout(false)}
         />

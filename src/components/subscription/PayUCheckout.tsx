@@ -7,6 +7,7 @@ interface PayUCheckoutProps {
   userEmail: string;
   userName: string;
   userPhone: string;
+  userId?: string;
   onSuccess?: () => void;
   onFailure?: () => void;
 }
@@ -17,6 +18,7 @@ export const PayUCheckout = ({
   userEmail,
   userName,
   userPhone,
+  userId,
   onSuccess,
   onFailure
 }: PayUCheckoutProps) => {
@@ -25,20 +27,26 @@ export const PayUCheckout = ({
   useEffect(() => {
     if (formRef.current) {
       // Auto-submit form to redirect to PayU
+      console.log('Submitting PayU form...');
       formRef.current.submit();
     }
   }, []);
 
+  // Build URLs - use VITE_URL if available, otherwise use window.location.origin
+  const baseUrl = import.meta.env.VITE_URL || window.location.origin;
+  
   const paymentForm = payuService.createPaymentForm({
     amount,
     productInfo: 'Inventory Subscription Renewal - Annual Plan',
-    firstName: userName.split(' ')[0] || 'Customer', // First part of name
-    lastName: userName.split(' ').slice(1).join(' ') || 'User', // Rest of name as lastname
+    firstName: userName.split(' ')[0] || 'Customer',
+    lastName: userName.split(' ').slice(1).join(' ') || 'User',
     email: userEmail,
     phone: userPhone,
     transactionId,
-    successUrl: `${window.location.origin}/payment-success?txnid=${transactionId}`,
-    failureUrl: `${window.location.origin}/payment-failure?txnid=${transactionId}`,
+    userId: userId || '',
+    successUrl: `${baseUrl}/payment-success?txnid=${transactionId}`,
+    failureUrl: `${baseUrl}/payment-failure?txnid=${transactionId}`,
+    cancelUrl: `${baseUrl}/payment-failure?txnid=${transactionId}&cancelled=true`,
     // Add default address fields
     address1: 'N/A',
     city: 'N/A',
@@ -46,6 +54,9 @@ export const PayUCheckout = ({
     country: 'India',
     zipcode: '000000'
   });
+
+  console.log('PayU Form Action:', paymentForm.action);
+  console.log('PayU Form Fields:', Object.keys(paymentForm.fields));
 
   return (
     <form
@@ -55,7 +66,7 @@ export const PayUCheckout = ({
       style={{ display: 'none' }}
     >
       {Object.entries(paymentForm.fields).map(([key, value]) => (
-        <input key={key} type="hidden" name={key} value={value} />
+        <input key={key} type="hidden" name={key} value={value || ''} />
       ))}
     </form>
   );

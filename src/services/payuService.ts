@@ -10,12 +10,14 @@ interface PayUPaymentParams {
   amount: number;
   productInfo: string;
   firstName: string;
-  lastName?: string; // Add optional lastname
+  lastName?: string;
   email: string;
   phone: string;
   transactionId: string;
-  successUrl: string;
-  failureUrl: string;
+  userId?: string; // User ID for tracking
+  successUrl?: string;
+  failureUrl?: string;
+  cancelUrl?: string;
   // Optional address fields
   address1?: string;
   city?: string;
@@ -42,7 +44,7 @@ class PayUService {
 
   /**
    * Generate SHA512 hash for PayU payment request
-   * Format: key|txnid|amount|productinfo|firstname|email|||||||||||salt
+   * PayU hash format: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt
    */
   generateHash(params: {
     key: string;
@@ -51,15 +53,37 @@ class PayUService {
     productinfo: string;
     firstname: string;
     email: string;
+    udf1?: string;
+    udf2?: string;
+    udf3?: string;
+    udf4?: string;
+    udf5?: string;
     salt: string;
   }): string {
-    const hashString = `${params.key}|${params.txnid}|${params.amount}|${params.productinfo}|${params.firstname}|${params.email}|||||||||||${params.salt}`;
-    return CryptoJS.SHA512(hashString).toString();
+    // PayU hash sequence: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt
+    const hashSequence = [
+      params.key,
+      params.txnid,
+      params.amount,
+      params.productinfo,
+      params.firstname,
+      params.email,
+      params.udf1 || '',
+      params.udf2 || '',
+      params.udf3 || '',
+      params.udf4 || '',
+      params.udf5 || '',
+      '', '', '', '', '', // 5 empty fields before salt
+      params.salt
+    ].join('|');
+    
+    console.log('Hash sequence (preview):', hashSequence.substring(0, 100) + '...');
+    return CryptoJS.SHA512(hashSequence).toString(CryptoJS.enc.Hex);
   }
 
   /**
    * Verify payment response hash from PayU
-   * Format: salt|status|||||||||||email|firstname|productinfo|amount|txnid|key
+   * Reverse hash format: salt|status||||||udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
    */
   verifyPaymentResponse(response: {
     status: string;
@@ -69,9 +93,30 @@ class PayUService {
     firstname: string;
     email: string;
     hash: string;
+    udf1?: string;
+    udf2?: string;
+    udf3?: string;
+    udf4?: string;
+    udf5?: string;
   }): boolean {
-    const hashString = `${this.config.merchantSalt}|${response.status}|||||||||||${response.email}|${response.firstname}|${response.productinfo}|${response.amount}|${response.txnid}|${this.config.merchantKey}`;
-    const calculatedHash = CryptoJS.SHA512(hashString).toString();
+    const hashSequence = [
+      this.config.merchantSalt,
+      response.status,
+      '', '', '', '', '', // 5 empty fields
+      response.udf5 || '',
+      response.udf4 || '',
+      response.udf3 || '',
+      response.udf2 || '',
+      response.udf1 || '',
+      response.email,
+      response.firstname,
+      response.productinfo,
+      response.amount,
+      response.txnid,
+      this.config.merchantKey
+    ].join('|');
+    
+    const calculatedHash = CryptoJS.SHA512(hashSequence).toString(CryptoJS.enc.Hex);
     return calculatedHash.toLowerCase() === response.hash.toLowerCase();
   }
 
@@ -96,6 +141,13 @@ class PayUService {
     const email = params.email.trim();
     const phone = this.formatPhoneNumber(params.phone); // Format to 10 digits
     
+    // UDF fields for tracking
+    const udf1 = params.userId || ''; // Store user ID
+    const udf2 = 'subscription_renewal'; // Payment type
+    const udf3 = '';
+    const udf4 = '';
+    const udf5 = '';
+    
     // Address fields with defaults
     const address1 = (params.address1 || 'N/A').substring(0, 100);
     const city = (params.city || 'N/A').substring(0, 20);
@@ -108,8 +160,13 @@ class PayUService {
       throw new Error(`Invalid payment parameters: email=${!!email}, name=${!!firstname}, phone=${phone.length} digits`);
     }
 
-    // Generate hash (PayU format: key|txnid|amount|productinfo|firstname|email|||||||||||salt)
-    // Note: lastname and address fields are NOT in the hash for basic integration
+    // Build URLs - use VITE_URL if available, otherwise use window.location.origin
+    const baseAppUrl = import.meta.env.VITE_URL || window.location.origin;
+    const surl = params.successUrl || `${baseAppUrl}/payment-success?txnid=${txnid}`;
+    const furl = params.failureUrl || `${baseAppUrl}/payment-failure?txnid=${txnid}`;
+    const curl = params.cancelUrl || `${baseAppUrl}/payment-failure?txnid=${txnid}&cancelled=true`;
+
+    // Generate hash with UDF fields
     const hash = this.generateHash({
       key: this.config.merchantKey,
       txnid,
@@ -117,10 +174,15 @@ class PayUService {
       productinfo,
       firstname,
       email,
+      udf1,
+      udf2,
+      udf3,
+      udf4,
+      udf5,
       salt: this.config.merchantSalt
     });
 
-    // Debug logging (remove in production)
+    // Debug logging
     console.log('PayU Payment Request:', {
       key: this.config.merchantKey,
       txnid,
@@ -130,8 +192,15 @@ class PayUService {
       lastname,
       email,
       phone,
+      surl,
+      furl,
+      curl,
+      udf1,
+      udf2,
       hash: hash.substring(0, 20) + '...',
-      testMode: this.config.testMode
+      hashLength: hash.length,
+      testMode: this.config.testMode,
+      baseUrl
     });
 
     const fields: Record<string, string> = {
@@ -142,13 +211,19 @@ class PayUService {
       firstname,
       email,
       phone,
-      surl: params.successUrl,
-      furl: params.failureUrl,
+      surl,
+      furl,
+      curl,
       hash,
-      service_provider: 'payu_paisa'
+      service_provider: 'payu_paisa',
+      udf1,
+      udf2,
+      udf3,
+      udf4,
+      udf5
     };
 
-    // Add optional fields that PayU might require
+    // Add optional fields
     if (lastname) fields.lastname = lastname;
     if (address1) fields.address1 = address1;
     if (city) fields.city = city;
