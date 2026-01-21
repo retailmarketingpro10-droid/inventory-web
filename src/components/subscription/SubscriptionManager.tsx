@@ -36,7 +36,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
-import { PayUCheckout } from '@/components/subscription/PayUCheckout';
+// PayU payment integration temporarily disabled - under development
+// import { PayUCheckout } from '@/components/subscription/PayUCheckout';
 
 interface Subscription {
   id: string;
@@ -68,9 +69,7 @@ export const SubscriptionManager = () => {
     transaction_id: '',
     notes: ''
   });
-  const [showPayUCheckout, setShowPayUCheckout] = useState(false);
-  const [paymentTransactionId, setPaymentTransactionId] = useState('');
-  const [pendingSubscriptionId, setPendingSubscriptionId] = useState<string | null>(null);
+  const [showDevelopmentModal, setShowDevelopmentModal] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [subscriptionToCancel, setSubscriptionToCancel] = useState<string | null>(null);
   const { toast } = useToast();
@@ -246,132 +245,11 @@ export const SubscriptionManager = () => {
     }
   };
 
-  const handleRenewal = async () => {
-    if (!user?.id) return;
-
-    try {
-      const renewalAmount = 10; // Annual renewal price (testing amount)
-      
-      // Calculate end date - use currentSubscription if available, otherwise use userCreatedAt + 11 months
-      let currentEndDate: Date;
-      if (currentSubscription) {
-        currentEndDate = new Date(currentSubscription.end_date);
-      } else if (userCreatedAt) {
-        // For trial users without subscription record, calculate from account creation + 11 months
-        currentEndDate = new Date(userCreatedAt);
-        currentEndDate.setMonth(currentEndDate.getMonth() + 11);
-      } else {
-        // Fallback to today if no dates available
-        currentEndDate = new Date();
-      }
-      
-      const newEndDate = new Date(currentEndDate);
-      newEndDate.setFullYear(newEndDate.getFullYear() + 1);
-
-      // If PayU is selected, initiate payment gateway flow
-      if (renewalData.payment_method === 'payu') {
-        // Import payuService dynamically
-        const { payuService } = await import('@/services/payuService');
-        
-        // Generate unique transaction ID
-        const transactionId = payuService.generateTransactionId();
-        setPaymentTransactionId(transactionId);
-
-        // Create pending subscription first
-        const { data: newSubscription, error } = await (supabase as any)
-          .from('subscriptions')
-          .insert([{
-            user_id: user.id,
-            subscription_type: 'annual',
-            status: 'pending', // Set to pending until payment confirmed
-            amount_paid: renewalAmount,
-            start_date: currentEndDate.toISOString().split('T')[0],
-            end_date: newEndDate.toISOString().split('T')[0],
-            renewal_date: newEndDate.toISOString().split('T')[0],
-            payment_status: 'pending',
-            payment_method: 'payu',
-            transaction_id: transactionId,
-            notes: 'Payment pending via PayU - Redirecting to payment gateway...'
-          }])
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        // Store subscription ID in sessionStorage for callback
-        sessionStorage.setItem('pending_subscription_id', newSubscription.id);
-        sessionStorage.setItem('pending_transaction_id', transactionId);
-        setPendingSubscriptionId(newSubscription.id);
-
-        // Close dialog and show PayU checkout
-        setShowRenewalDialog(false);
-        setShowPayUCheckout(true);
-        
-        return;
-      }
-
-      // For manual payment methods (bank transfer, UPI, etc.)
-      const { data: newSubscription, error } = await (supabase as any)
-        .from('subscriptions')
-        .insert([{
-          user_id: user.id,
-          subscription_type: 'annual',
-          status: 'active',
-          amount_paid: renewalAmount,
-          start_date: currentEndDate.toISOString().split('T')[0],
-          end_date: newEndDate.toISOString().split('T')[0],
-          renewal_date: newEndDate.toISOString().split('T')[0],
-          payment_status: renewalData.transaction_id ? 'paid' : 'pending',
-          payment_method: renewalData.payment_method,
-          transaction_id: renewalData.transaction_id || null,
-          notes: renewalData.notes || `Annual renewal - ${renewalData.payment_method}`
-        }])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Update old subscription to expired (if it exists)
-      if (currentSubscription) {
-        await (supabase as any)
-          .from('subscriptions')
-          .update({ status: 'expired' })
-          .eq('id', currentSubscription.id);
-      }
-
-      // Update profile
-      await (supabase as any)
-        .from('profiles')
-        .update({ 
-          subscription_id: newSubscription.id,
-          subscription_status: 'active'
-        })
-        .eq('id', user.id);
-
-      toast({
-        title: "Success",
-        description: "Subscription renewed successfully for another year"
-      });
-
-      setShowRenewalDialog(false);
-      setRenewalData({
-        payment_method: 'payu',
-        transaction_id: '',
-        notes: ''
-      });
-      fetchSubscriptions();
-      
-      // Reload page after a short delay to update access control
-      setTimeout(() => {
-        window.location.reload();
-      }, 1500);
-    } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to renew subscription",
-        variant: "destructive"
-      });
-    }
+  const handleRenewal = () => {
+    // Payment integration is under development
+    // Show development modal instead of processing payment
+    setShowRenewalDialog(false);
+    setShowDevelopmentModal(true);
   };
 
   const handleCancelPendingSubscription = (subscriptionId: string) => {
@@ -1149,18 +1027,46 @@ export const SubscriptionManager = () => {
         </DialogContent>
       </Dialog>
 
-      {/* PayU Checkout - Auto-redirects to PayU */}
-      {showPayUCheckout && user && paymentTransactionId && (
-        <PayUCheckout
-          amount={10}
-          transactionId={paymentTransactionId}
-          userEmail={user.email || ''}
-          userName={user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'}
-          userPhone={user.user_metadata?.phone || user.phone || '0000000000'}
-          onSuccess={() => setShowPayUCheckout(false)}
-          onFailure={() => setShowPayUCheckout(false)}
-        />
-      )}
+      {/* Payment Under Development Modal */}
+      <Dialog open={showDevelopmentModal} onOpenChange={setShowDevelopmentModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-warning" />
+              Feature Under Development
+            </DialogTitle>
+            <DialogDescription>
+              The payment integration feature is currently under development.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <CreditCard className="h-6 w-6 text-warning mt-0.5" />
+                <div>
+                  <p className="font-semibold text-warning mb-1">Payment Gateway Coming Soon</p>
+                  <p className="text-sm text-muted-foreground">
+                    We are currently working on integrating the PayU payment gateway. 
+                    This feature will be available soon.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-muted rounded-lg p-4">
+              <p className="text-sm font-semibold mb-2">For immediate assistance:</p>
+              <p className="text-sm text-muted-foreground">
+                Please contact us at <strong className="text-primary">retailmarketingpro1.0@gmail.com</strong> for 
+                manual payment processing or any subscription-related queries.
+              </p>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={() => setShowDevelopmentModal(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Cancel Pending Subscription Confirmation Dialog */}
       <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
