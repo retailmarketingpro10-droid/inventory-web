@@ -26,33 +26,25 @@ export const PayUCheckout = ({
 
   useEffect(() => {
     if (formRef.current) {
-      // Auto-submit form to redirect to PayU
       console.log('Submitting PayU form...');
       formRef.current.submit();
     }
   }, []);
 
-  // Build URLs - use VITE_URL if available, otherwise use window.location.origin
-  const baseUrl = import.meta.env.VITE_URL || window.location.origin;
-  
   const paymentForm = payuService.createPaymentForm({
     amount,
-    productInfo: 'Inventory Subscription Renewal - Annual Plan',
+    productInfo: 'Inventory Subscription Renewal',
     firstName: userName.split(' ')[0] || 'Customer',
-    lastName: userName.split(' ').slice(1).join(' ') || 'User',
+    lastName: userName.split(' ').slice(1).join(' ') || '',
     email: userEmail,
     phone: userPhone,
     transactionId,
-    userId: userId || '',
-    successUrl: `${baseUrl}/payment-success?txnid=${transactionId}`,
-    failureUrl: `${baseUrl}/payment-failure?txnid=${transactionId}`,
-    cancelUrl: `${baseUrl}/payment-failure?txnid=${transactionId}&cancelled=true`,
-    // Add default address fields
-    address1: 'N/A',
-    city: 'N/A',
-    state: 'N/A',
-    country: 'India',
-    zipcode: '000000'
+    // UDF fields - keep empty strings for proper hash generation
+    udf1: '',
+    udf2: '',
+    udf3: '',
+    udf4: '',
+    udf5: '',
   });
 
   console.log('PayU Form Action:', paymentForm.action);

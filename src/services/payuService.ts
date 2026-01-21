@@ -17,12 +17,11 @@ interface PayUPaymentParams {
   userId?: string;
   successUrl?: string;
   failureUrl?: string;
-  cancelUrl?: string;
-  address1?: string;
-  city?: string;
-  state?: string;
-  country?: string;
-  zipcode?: string;
+  udf1?: string;
+  udf2?: string;
+  udf3?: string;
+  udf4?: string;
+  udf5?: string;
 }
 
 class PayUService {
@@ -50,34 +49,47 @@ class PayUService {
 
   /**
    * Generate SHA512 hash for PayU payment request
-   * EXACT format from working project: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt
+   * EXACT PayU Format: sha512(key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||SALT)
+   * Note: 6 empty pipes (||||||) after udf5 before SALT
    */
-  generateHash(params: Record<string, string>, salt: string): string {
-    // PayU hash format: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt
-    const hashSequence = [
-      params.key,
-      params.txnid,
-      params.amount,
-      params.productinfo,
-      params.firstname,
-      params.email,
-      params.udf1 || '',
-      params.udf2 || '',
-      params.udf3 || '',
-      params.udf4 || '',
-      params.udf5 || '',
-      '', '', '', '', '', // 5 empty fields before salt
-      salt
-    ].join('|');
+  generateHash(params: {
+    key: string;
+    txnid: string;
+    amount: string;
+    productinfo: string;
+    firstname: string;
+    email: string;
+    udf1?: string;
+    udf2?: string;
+    udf3?: string;
+    udf4?: string;
+    udf5?: string;
+  }, salt: string): string {
+    // PayU hash format: key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||SALT
+    // The sequence requires UDF fields (empty if not used) followed by 6 empty pipes before salt
+    const hashString = 
+      `${params.key}|` +
+      `${params.txnid}|` +
+      `${params.amount}|` +
+      `${params.productinfo}|` +
+      `${params.firstname}|` +
+      `${params.email}|` +
+      `${params.udf1 || ''}|` +
+      `${params.udf2 || ''}|` +
+      `${params.udf3 || ''}|` +
+      `${params.udf4 || ''}|` +
+      `${params.udf5 || ''}|` +
+      `|||||${salt}`; // 6 empty pipes (5 more after the last |) then salt
     
-    console.log('Hash String:', hashSequence);
-    const hash = CryptoJS.SHA512(hashSequence).toString(CryptoJS.enc.Hex);
+    console.log('Hash String:', hashString);
+    const hash = CryptoJS.SHA512(hashString).toString().toLowerCase();
     console.log('Generated Hash:', hash);
     return hash;
   }
 
   /**
    * Verify payment response hash from PayU
+   * Reverse format: SALT|status||||||udf5|udf4|udf3|udf2|udf1|email|firstname|productinfo|amount|txnid|key
    */
   verifyPaymentResponse(response: {
     status: string;
@@ -93,25 +105,24 @@ class PayUService {
     udf4?: string;
     udf5?: string;
   }): boolean {
-    const hashSequence = [
-      this.config.merchantSalt,
-      response.status,
-      '', '', '', '', '',
-      response.udf5 || '',
-      response.udf4 || '',
-      response.udf3 || '',
-      response.udf2 || '',
-      response.udf1 || '',
-      response.email,
-      response.firstname,
-      response.productinfo,
-      response.amount,
-      response.txnid,
-      this.config.merchantKey
-    ].join('|');
+    const hashString = 
+      `${this.config.merchantSalt}|` +
+      `${response.status}|` +
+      `|||||` + // 6 empty fields
+      `${response.udf5 || ''}|` +
+      `${response.udf4 || ''}|` +
+      `${response.udf3 || ''}|` +
+      `${response.udf2 || ''}|` +
+      `${response.udf1 || ''}|` +
+      `${response.email}|` +
+      `${response.firstname}|` +
+      `${response.productinfo}|` +
+      `${response.amount}|` +
+      `${response.txnid}|` +
+      `${this.config.merchantKey}`;
     
-    const calculatedHash = CryptoJS.SHA512(hashSequence).toString(CryptoJS.enc.Hex);
-    return calculatedHash.toLowerCase() === response.hash.toLowerCase();
+    const calculatedHash = CryptoJS.SHA512(hashString).toString().toLowerCase();
+    return calculatedHash === response.hash.toLowerCase();
   }
 
   /**
@@ -127,10 +138,10 @@ class PayUService {
       ? 'https://test.payu.in/_payment'
       : 'https://secure.payu.in/_payment';
 
-    // Generate unique transaction ID
+    // Prepare transaction ID (max 30 chars)
     const txnid = params.transactionId.substring(0, 30);
     
-    // Format amount to 2 decimal places
+    // Format amount to 2 decimal places as string
     const amount = params.amount.toFixed(2);
     
     // Prepare basic fields
@@ -140,64 +151,84 @@ class PayUService {
     const email = params.email.trim();
     const phone = this.formatPhoneNumber(params.phone);
 
+    // UDF fields (User Defined Fields) - use empty string if not provided
+    const udf1 = params.udf1 || '';
+    const udf2 = params.udf2 || '';
+    const udf3 = params.udf3 || '';
+    const udf4 = params.udf4 || '';
+    const udf5 = params.udf5 || '';
+
     // Validate required fields
     if (!email || !firstname || phone.length !== 10) {
       throw new Error(`Invalid payment parameters: email=${!!email}, name=${!!firstname}, phone=${phone.length} digits`);
     }
 
-    // Build URLs
-    const appBaseUrl = import.meta.env.VITE_URL || window.location.origin;
+    // Build URLs - ensure no trailing slash issues
+    let appBaseUrl = import.meta.env.VITE_URL || window.location.origin;
+    // Remove trailing slash if present
+    if (appBaseUrl.endsWith('/')) {
+      appBaseUrl = appBaseUrl.slice(0, -1);
+    }
+    // Remove /subscription if present at the end
+    if (appBaseUrl.endsWith('/subscription')) {
+      appBaseUrl = appBaseUrl.replace('/subscription', '');
+    }
+    
     const surl = params.successUrl || `${appBaseUrl}/payment-success?txnid=${txnid}`;
     const furl = params.failureUrl || `${appBaseUrl}/payment-failure?txnid=${txnid}`;
-    const curl = params.cancelUrl || `${appBaseUrl}/payment-failure?txnid=${txnid}&cancelled=true`;
 
-    // Prepare payment parameters object for hash generation
-    const paymentParams: Record<string, string> = {
+    // Generate hash with ALL required fields including UDFs
+    const hash = this.generateHash({
       key: this.config.merchantKey,
-      txnid: txnid,
-      amount: amount,
-      productinfo: productinfo,
-      firstname: firstname,
-      email: email,
-      phone: phone,
-      surl: surl,
-      furl: furl,
-      curl: curl,
-      udf1: params.userId || '',
-      udf2: 'subscription_renewal',
-      udf3: '',
-      udf4: '',
-      udf5: '',
+      txnid,
+      amount,
+      productinfo,
+      firstname,
+      email,
+      udf1,
+      udf2,
+      udf3,
+      udf4,
+      udf5
+    }, this.config.merchantSalt);
+
+    // Build the complete form fields
+    const formFields: Record<string, string> = {
+      key: this.config.merchantKey,
+      txnid,
+      amount,
+      productinfo,
+      firstname,
+      email,
+      phone,
+      surl,
+      furl,
+      hash,
+      service_provider: 'payu_paisa',
+      udf1,
+      udf2,
+      udf3,
+      udf4,
+      udf5
     };
 
-    // Generate hash
-    paymentParams.hash = this.generateHash(paymentParams, this.config.merchantSalt);
-
-    // Add service provider
-    paymentParams.service_provider = 'payu_paisa';
-
     // Add optional fields
-    if (lastname) paymentParams.lastname = lastname;
-    if (params.address1) paymentParams.address1 = params.address1.substring(0, 100);
-    if (params.city) paymentParams.city = params.city.substring(0, 20);
-    if (params.state) paymentParams.state = params.state.substring(0, 20);
-    if (params.country) paymentParams.country = params.country.substring(0, 20);
-    if (params.zipcode) paymentParams.zipcode = params.zipcode.substring(0, 10);
+    if (lastname) formFields.lastname = lastname;
 
     console.log('PayU Payment Request:', {
-      key: paymentParams.key,
-      txnid: paymentParams.txnid,
-      amount: paymentParams.amount,
-      productinfo: paymentParams.productinfo,
-      firstname: paymentParams.firstname,
-      email: paymentParams.email,
-      phone: paymentParams.phone,
-      surl: paymentParams.surl,
-      furl: paymentParams.furl,
-      udf1: paymentParams.udf1,
-      udf2: paymentParams.udf2,
-      hash: paymentParams.hash.substring(0, 30) + '...',
-      hashLength: paymentParams.hash.length,
+      key: formFields.key,
+      txnid: formFields.txnid,
+      amount: formFields.amount,
+      productinfo: formFields.productinfo,
+      firstname: formFields.firstname,
+      email: formFields.email,
+      phone: formFields.phone,
+      surl: formFields.surl,
+      furl: formFields.furl,
+      udf1: formFields.udf1,
+      udf2: formFields.udf2,
+      hash: formFields.hash.substring(0, 30) + '...',
+      hashLength: formFields.hash.length,
       testMode: this.config.testMode,
       paymentUrl: baseUrl
     });
@@ -205,7 +236,7 @@ class PayUService {
     return {
       action: baseUrl,
       method: 'POST' as const,
-      fields: paymentParams
+      fields: formFields
     };
   }
 
