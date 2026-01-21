@@ -36,8 +36,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
-// PayU payment integration temporarily disabled - under development
-// import { PayUCheckout } from '@/components/subscription/PayUCheckout';
+import { PayUCheckout, SecurePaymentBadge } from '@/components/subscription/PayUCheckout';
 
 interface Subscription {
   id: string;
@@ -69,7 +68,6 @@ export const SubscriptionManager = () => {
     transaction_id: '',
     notes: ''
   });
-  const [showDevelopmentModal, setShowDevelopmentModal] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [subscriptionToCancel, setSubscriptionToCancel] = useState<string | null>(null);
   const { toast } = useToast();
@@ -246,10 +244,24 @@ export const SubscriptionManager = () => {
   };
 
   const handleRenewal = () => {
-    // Payment integration is under development
-    // Show development modal instead of processing payment
+    // Close the renewal dialog - PayU checkout will handle payment
     setShowRenewalDialog(false);
-    setShowDevelopmentModal(true);
+  };
+
+  const handlePaymentSuccess = () => {
+    toast({
+      title: "Payment Initiated",
+      description: "Redirecting to PayU for secure payment...",
+    });
+    // Payment callback will be handled by the PayU verify function
+  };
+
+  const handlePaymentFailure = (error: string) => {
+    toast({
+      title: "Payment Error",
+      description: error || "Failed to initiate payment. Please try again.",
+      variant: "destructive"
+    });
   };
 
   const handleCancelPendingSubscription = (subscriptionId: string) => {
@@ -1014,55 +1026,24 @@ export const SubscriptionManager = () => {
                 </div>
               </div>
             </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowRenewalDialog(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleRenewal}>
-                <IndianRupee className="w-4 h-4 mr-2" />
-                Confirm Renewal
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Payment Under Development Modal */}
-      <Dialog open={showDevelopmentModal} onOpenChange={setShowDevelopmentModal}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-warning" />
-              Feature Under Development
-            </DialogTitle>
-            <DialogDescription>
-              The payment integration feature is currently under development.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <CreditCard className="h-6 w-6 text-warning mt-0.5" />
-                <div>
-                  <p className="font-semibold text-warning mb-1">Payment Gateway Coming Soon</p>
-                  <p className="text-sm text-muted-foreground">
-                    We are currently working on integrating the PayU payment gateway. 
-                    This feature will be available soon.
-                  </p>
-                </div>
+            <div className="flex flex-col gap-3">
+              <div className="flex justify-center">
+                <SecurePaymentBadge />
               </div>
-            </div>
-            <div className="bg-muted rounded-lg p-4">
-              <p className="text-sm font-semibold mb-2">For immediate assistance:</p>
-              <p className="text-sm text-muted-foreground">
-                Please contact us at <strong className="text-primary">retailmarketingpro1.0@gmail.com</strong> for 
-                manual payment processing or any subscription-related queries.
-              </p>
-            </div>
-            <div className="flex justify-end">
-              <Button onClick={() => setShowDevelopmentModal(false)}>
-                Close
-              </Button>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowRenewalDialog(false)}>
+                  Cancel
+                </Button>
+                <PayUCheckout
+                  amount={10}
+                  productInfo="Inventory Manager Annual Subscription"
+                  subscriptionType="annual"
+                  onSuccess={handlePaymentSuccess}
+                  onFailure={handlePaymentFailure}
+                  buttonText="Pay ₹10 Now"
+                  className="bg-primary hover:bg-primary/90"
+                />
+              </div>
             </div>
           </div>
         </DialogContent>
