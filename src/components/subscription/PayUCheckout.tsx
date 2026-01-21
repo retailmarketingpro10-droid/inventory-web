@@ -7,6 +7,7 @@ import { Loader2, CreditCard, Shield, Lock } from 'lucide-react';
 
 // PayU Configuration from environment
 const PAYU_MERCHANT_KEY = import.meta.env.VITE_PAYU_MERCHANT_KEY || '';
+const PAYU_MERCHANT_SALT = import.meta.env.VITE_PAYU_MERCHANT_SALT || '';
 const PAYU_TEST_MODE = import.meta.env.VITE_PAYU_TEST_MODE === 'true';
 const SITE_URL = import.meta.env.VITE_URL || window.location.origin;
 
@@ -52,6 +53,36 @@ const generateTxnId = (): string => {
   return `INV${timestamp}${randomStr}`.toUpperCase();
 };
 
+// Generate SHA-512 hash using Web Crypto API (client-side)
+const generateSHA512Hash = async (message: string): Promise<string> => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-512', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+// Generate PayU hash (client-side)
+// Formula: sha512(key|txnid|amount|productinfo|firstname|email|udf1|udf2|udf3|udf4|udf5||||||salt)
+const generatePayUHash = async (
+  key: string,
+  txnid: string,
+  amount: string,
+  productinfo: string,
+  firstname: string,
+  email: string,
+  udf1: string = '',
+  udf2: string = '',
+  udf3: string = '',
+  udf4: string = '',
+  udf5: string = '',
+  salt: string
+): Promise<string> => {
+  const hashString = `${key}|${txnid}|${amount}|${productinfo}|${firstname}|${email}|${udf1}|${udf2}|${udf3}|${udf4}|${udf5}||||||${salt}`;
+  console.log('Hash string (for debugging):', hashString.replace(salt, '****'));
+  return await generateSHA512Hash(hashString);
+};
+
 export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
   amount,
   productInfo,
@@ -86,6 +117,16 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
       return;
     }
 
+    // Validate PayU credentials
+    if (!PAYU_MERCHANT_KEY || !PAYU_MERCHANT_SALT) {
+      toast({
+        title: "Configuration Error",
+        description: "Payment gateway is not properly configured. Please contact support.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -95,7 +136,7 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
       // Get user details
       const firstname = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Customer';
       const email = user.email || '';
-      const phone = user.user_metadata?.phone || user.phone || '';
+      const phone = user.user_metadata?.phone || user.phone || '9999999999';
 
       // Create a pending subscription record first
       const startDate = new Date();
@@ -126,50 +167,39 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
 
       if (subscriptionError) {
         console.error('Error creating pending subscription:', subscriptionError);
-        // Continue anyway - the payment verification will create it
+        // Continue anyway - we'll handle it after payment
       }
 
-      // Get hash from Supabase Edge Function
-      const { data: session } = await supabase.auth.getSession();
-      
-      if (!session?.session?.access_token) {
-        throw new Error('No active session');
-      }
+      // UDF fields for storing user context
+      const udf1 = user.id;           // Store user_id
+      const udf2 = subscriptionType;   // Store subscription type
+      const udf3 = '';
+      const udf4 = '';
+      const udf5 = '';
 
-      const hashResponse = await supabase.functions.invoke('payu-hash', {
-        body: {
-          txnid,
-          amount: amount.toFixed(2),
-          productinfo: productInfo,
-          firstname,
-          email,
-          phone,
-          udf1: user.id,           // Store user_id
-          udf2: subscriptionType,   // Store subscription type
-          udf3: '',
-          udf4: '',
-          udf5: '',
-        },
-      });
+      // Generate hash client-side
+      const hash = await generatePayUHash(
+        PAYU_MERCHANT_KEY,
+        txnid,
+        amount.toFixed(2),
+        productInfo,
+        firstname,
+        email,
+        udf1,
+        udf2,
+        udf3,
+        udf4,
+        udf5,
+        PAYU_MERCHANT_SALT
+      );
 
-      if (hashResponse.error) {
-        throw new Error(hashResponse.error.message || 'Failed to generate payment hash');
-      }
-
-      const { hash, key } = hashResponse.data;
-
-      if (!hash || !key) {
-        throw new Error('Invalid hash response from server');
-      }
-
-      // Get Supabase function URL for callbacks
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://fxylrxbhcqkwyxhftxxp.supabase.co';
-      const successUrl = `${supabaseUrl}/functions/v1/payu-verify`;
-      const failureUrl = `${supabaseUrl}/functions/v1/payu-verify`;
+      // Success and Failure URLs - redirect back to our app
+      const successUrl = `${SITE_URL}/payment-success`;
+      const failureUrl = `${SITE_URL}/payment-failure`;
 
       // Set form data - this will trigger the form submission
       setFormData({
-        key,
+        key: PAYU_MERCHANT_KEY,
         txnid,
         amount: amount.toFixed(2),
         productinfo: productInfo,
@@ -179,11 +209,11 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
         surl: successUrl,
         furl: failureUrl,
         hash,
-        udf1: user.id,
-        udf2: subscriptionType,
-        udf3: '',
-        udf4: '',
-        udf5: '',
+        udf1,
+        udf2,
+        udf3,
+        udf4,
+        udf5,
       });
 
       toast({
