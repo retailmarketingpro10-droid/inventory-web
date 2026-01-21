@@ -170,7 +170,8 @@ export const SubscriptionManager = () => {
 
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      // Cast to any because subscriptions table types may not be generated
+      const { data, error } = await (supabase as any)
         .from('subscriptions')
         .select('*')
         .eq('user_id', user.id)
@@ -190,7 +191,7 @@ export const SubscriptionManager = () => {
       // Only set currentSubscription if it's active AND paid
       // Pending subscriptions should NOT be shown as active
       const activePaidSubscription = (data || []).find(
-        sub => sub.status === 'active' && sub.payment_status === 'paid'
+        (sub: Subscription) => sub.status === 'active' && sub.payment_status === 'paid'
       );
       
       // If no active paid subscription, set to null (will show trial period if applicable)
@@ -277,7 +278,7 @@ export const SubscriptionManager = () => {
         setPaymentTransactionId(transactionId);
 
         // Create pending subscription first
-        const { data: newSubscription, error } = await supabase
+        const { data: newSubscription, error } = await (supabase as any)
           .from('subscriptions')
           .insert([{
             user_id: user.id,
@@ -310,7 +311,7 @@ export const SubscriptionManager = () => {
       }
 
       // For manual payment methods (bank transfer, UPI, etc.)
-      const { data: newSubscription, error } = await supabase
+      const { data: newSubscription, error } = await (supabase as any)
         .from('subscriptions')
         .insert([{
           user_id: user.id,
@@ -332,14 +333,14 @@ export const SubscriptionManager = () => {
 
       // Update old subscription to expired (if it exists)
       if (currentSubscription) {
-        await supabase
+        await (supabase as any)
           .from('subscriptions')
           .update({ status: 'expired' })
           .eq('id', currentSubscription.id);
       }
 
       // Update profile
-      await supabase
+      await (supabase as any)
         .from('profiles')
         .update({ 
           subscription_id: newSubscription.id,
@@ -382,7 +383,7 @@ export const SubscriptionManager = () => {
     if (!user?.id || !subscriptionToCancel) return;
 
     try {
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('subscriptions')
         .delete()
         .eq('id', subscriptionToCancel)
@@ -1156,7 +1157,6 @@ export const SubscriptionManager = () => {
           userEmail={user.email || ''}
           userName={user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'}
           userPhone={user.user_metadata?.phone || user.phone || '0000000000'}
-          userId={user.id}
           onSuccess={() => setShowPayUCheckout(false)}
           onFailure={() => setShowPayUCheckout(false)}
         />
