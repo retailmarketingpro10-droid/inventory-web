@@ -37,6 +37,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
 import { PayUCheckout, SecurePaymentBadge } from '@/components/subscription/PayUCheckout';
+import { logger } from '@/lib/logger';
 
 interface Subscription {
   id: string;
@@ -104,7 +105,7 @@ export const SubscriptionManager = () => {
         
         // Validate dates
         if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-          console.error('Invalid subscription dates:', { start_date: currentSubscription.start_date, end_date: currentSubscription.end_date });
+          logger.error('Invalid subscription dates:', { start_date: currentSubscription.start_date, end_date: currentSubscription.end_date });
           return null;
         }
       } else if (userCreatedAt) {
@@ -116,7 +117,7 @@ export const SubscriptionManager = () => {
         
         // Validate dates
         if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-          console.error('Invalid user creation date:', userCreatedAt);
+          logger.error('Invalid user creation date:', userCreatedAt);
           return null;
         }
       } else {
@@ -146,7 +147,7 @@ export const SubscriptionManager = () => {
         endDate: endDate.toISOString().split('T')[0]
       };
     } catch (error) {
-      console.error('Error calculating subscription progress:', error);
+      logger.error('Error calculating subscription progress:', error);
       return null;
     }
   }, [currentSubscription, currentTime, userCreatedAt]);
@@ -175,10 +176,10 @@ export const SubscriptionManager = () => {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('Error fetching subscriptions:', error);
+        logger.error('Error fetching subscriptions:', error);
         // If it's a 406 or table doesn't exist, show user-friendly message
         if (error.code === 'PGRST301' || error.message?.includes('406')) {
-          console.warn('Subscriptions table may not be accessible. Check RLS policies.');
+          logger.warn('Subscriptions table may not be accessible. Check RLS policies.');
         }
         throw error;
       }
@@ -199,7 +200,7 @@ export const SubscriptionManager = () => {
         console.log('No subscriptions found for user. User may need to have a subscription created.');
       }
     } catch (error: any) {
-      console.error('Failed to load subscriptions:', error);
+      logger.error('Failed to load subscriptions:', error);
       toast({
         title: "Error",
         description: error.message || "Failed to load subscriptions. Please refresh the page.",
@@ -235,7 +236,7 @@ export const SubscriptionManager = () => {
         setUserCreatedAt(user.created_at);
       }
     } catch (error) {
-      console.error('Error fetching user creation date:', error);
+      logger.error('Error fetching user creation date:', error);
       // Fallback to auth user metadata
       if (user.created_at) {
         setUserCreatedAt(user.created_at);
@@ -282,7 +283,7 @@ export const SubscriptionManager = () => {
         .select();
 
       if (error) {
-        console.error('Delete subscription error:', error);
+        logger.error('Delete subscription error:', error);
         throw error;
       }
 
@@ -308,7 +309,7 @@ export const SubscriptionManager = () => {
       // Refresh subscriptions list
       await fetchSubscriptions();
     } catch (error: any) {
-      console.error('Failed to cancel subscription:', error);
+      logger.error('Failed to cancel subscription:', error);
       let errorMessage = "Failed to cancel subscription";
       
       // Provide more specific error messages

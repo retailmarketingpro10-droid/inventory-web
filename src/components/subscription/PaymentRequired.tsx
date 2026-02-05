@@ -4,6 +4,7 @@ import { AlertCircle, Lock, CreditCard, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 
 export const PaymentRequired = ({ daysRemaining }: { daysRemaining?: number }) => {
   const navigate = useNavigate();
@@ -31,7 +32,7 @@ export const PaymentRequired = ({ daysRemaining }: { daysRemaining?: number }) =
         // Ignore sessionStorage errors
       }
     } catch (storageError) {
-      console.warn('Failed to clear storage:', storageError);
+      logger.warn('Failed to clear storage:', storageError);
     }
     
     // Try API signout in background with timeout (fire-and-forget)
@@ -40,9 +41,7 @@ export const PaymentRequired = ({ daysRemaining }: { daysRemaining?: number }) =
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2000))
     ]).catch((error) => {
       // Silently ignore - we've already cleared local state
-      if (process.env.NODE_ENV === 'development') {
-        console.warn('SignOut API call failed (non-blocking):', error);
-      }
+      logger.warn('SignOut API call failed (non-blocking):', error);
     });
     
     // Always navigate immediately - don't wait for API

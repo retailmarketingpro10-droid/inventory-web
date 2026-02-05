@@ -3,6 +3,7 @@ import { X, Upload, Info, AlertTriangle, FileText, CheckCircle, AlertCircle } fr
 import { TallyImportProcessor } from "./TallyImportProcessor";
 import { type TallyProduct } from "@/utils/tallyParser";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface ImportModalProps {
   isOpen: boolean;
@@ -95,7 +96,7 @@ export function ImportModal({ isOpen, onClose, selectedCompany, onImportComplete
           setImportProgress(null);
           onImportComplete();
         } catch (error) {
-          console.error("Import processing error:", error);
+          logger.error("Import processing error:", error);
           setImportResults({
             success: false,
             error: `Failed to process file: ${error instanceof Error ? error.message : 'Unknown error'}`,
@@ -106,7 +107,7 @@ export function ImportModal({ isOpen, onClose, selectedCompany, onImportComplete
       
       reader.readAsText(importFile);
     } catch (error) {
-      console.error("Import error:", error);
+      logger.error("Import error:", error);
       setImportResults({
         success: false,
         error: "Failed to process file",

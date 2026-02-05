@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Package, Check, AlertTriangle, Save, RotateCcw } from 'lucide-react';
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { calculateGSTBreakdown, GSTConfig } from '@/utils/gstBreakdown';
+import { logger } from '@/lib/logger';
 
 interface PurchaseOrderItem {
   id: string;
@@ -130,7 +131,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
           }
         }
       } catch (error) {
-        console.error('Failed to fetch company state:', error);
+        logger.error('Failed to fetch company state:', error);
       }
       
       // Update GST config
@@ -234,7 +235,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
           .eq('id', item.id);
 
         if (updateError) {
-          console.error('Error updating PO item:', updateError);
+          logger.error('Error updating PO item:', updateError);
           throw new Error(`Failed to update item "${item.description}": ${updateError.message || 'Unknown error'}`);
         }
 
@@ -248,7 +249,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
             .eq('id', item.product_id);
 
           if (inventoryError) {
-            console.error('Error updating inventory:', inventoryError);
+            logger.error('Error updating inventory:', inventoryError);
             throw new Error(`Failed to update inventory for "${item.description}": ${inventoryError.message || 'Unknown error'}`);
           }
         }
@@ -267,7 +268,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
           .eq('id', po.id);
 
         if (statusError) {
-          console.error('Error updating PO status:', statusError);
+          logger.error('Error updating PO status:', statusError);
           throw new Error(`Failed to update PO status: ${statusError.message || 'Unknown error'}`);
         }
       } else {
@@ -278,7 +279,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
           .eq('id', po.id);
 
         if (statusError) {
-          console.error('Error updating PO status:', statusError);
+          logger.error('Error updating PO status:', statusError);
           throw new Error(`Failed to update PO status: ${statusError.message || 'Unknown error'}`);
         }
       }
@@ -291,7 +292,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
       onInventoryUpdated();
       onClose();
     } catch (error: any) {
-      console.error('Error updating inventory and receipt:', error);
+      logger.error('Error updating inventory and receipt:', error);
       const errorMessage = error?.message || error?.details || 'Failed to update inventory and receipt';
       toast({
         title: "Error",

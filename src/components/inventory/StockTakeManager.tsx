@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Package, Save, RotateCcw, Check, AlertTriangle, Edit3, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { logger } from "@/lib/logger";
 
 interface Product {
   id: string;
@@ -189,14 +190,14 @@ export const StockTakeManager = () => {
           const { error } = await updateQuery;
 
           if (error) {
-            console.error(`Error updating ${item.name}:`, error);
+            logger.error(`Error updating ${item.name}:`, error);
             failedItems.push(item.name);
             failedCount++;
           } else {
             successCount++;
           }
         } catch (itemError) {
-          console.error(`Error updating ${item.name}:`, itemError);
+          logger.error(`Error updating ${item.name}:`, itemError);
           failedItems.push(item.name);
           failedCount++;
         }
@@ -224,7 +225,7 @@ export const StockTakeManager = () => {
         });
       }
     } catch (error) {
-      console.error('Bulk update error:', error);
+      logger.error('Bulk update error:', error);
       toast({
         title: "Error",
         description: `Failed to update quantities: ${error instanceof Error ? error.message : 'Unknown error'}`,

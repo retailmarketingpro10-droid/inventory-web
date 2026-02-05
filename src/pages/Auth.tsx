@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -174,10 +175,10 @@ This email was sent from the Inventory Migrator contact form.
         const adminResult = await adminEmailResponse.json();
         
         if (!adminEmailResponse.ok || !adminResult.success) {
-          console.error('Admin email sending failed:', adminResult);
+          logger.error('Admin email sending failed:', adminResult);
         }
       } catch (adminEmailErr) {
-        console.error('Error sending admin email:', adminEmailErr);
+        logger.error('Error sending admin email:', adminEmailErr);
       }
 
       // Send confirmation email to user immediately
@@ -223,7 +224,7 @@ Inventory Migrator Team
           toast.success('Thank you! Our team will contact you soon.');
         }
       } catch (userEmailErr) {
-        console.error('Error sending user confirmation email:', userEmailErr);
+        logger.error('Error sending user confirmation email:', userEmailErr);
         toast.success('Thank you! Our team will contact you soon.');
       }
       

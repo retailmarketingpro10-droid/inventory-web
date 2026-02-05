@@ -29,6 +29,7 @@ import {
 import { pdf } from "@react-pdf/renderer";
 import { ReportPDF } from "@/components/pdf/ReportPDF";
 import { useCompany } from "@/contexts/CompanyContext";
+import { logger } from "@/lib/logger";
 
 interface GSTData {
   id: string;
@@ -175,7 +176,7 @@ export const GSTTracker = () => {
       const { data, error } = await query;
 
       if (error) {
-        console.error('Error fetching GST data:', error);
+        logger.error('Error fetching GST data:', error);
         throw error;
       }
       
@@ -192,14 +193,14 @@ export const GSTTracker = () => {
             const isSupplier = invoiceEntityType === 'supplier' && 
                    (transactionType === 'purchase' || transactionType === 'purchase_return');
             if (!isSupplier && invoiceEntityType === 'supplier') {
-              console.warn(`Supplier invoice ${entry.invoice_number} has incorrect transaction_type: ${transactionType} (expected purchase/purchase_return)`);
+              logger.warn(`Supplier invoice ${entry.invoice_number} has incorrect transaction_type: ${transactionType} (expected purchase/purchase_return)`);
             }
             return isSupplier;
           } else if (entityType === 'customer') {
             const isCustomer = invoiceEntityType === 'customer' && 
                    (transactionType === 'sale' || transactionType === 'sale_return');
             if (!isCustomer && invoiceEntityType === 'customer') {
-              console.warn(`Customer invoice ${entry.invoice_number} has incorrect transaction_type: ${transactionType} (expected sale/sale_return)`);
+              logger.warn(`Customer invoice ${entry.invoice_number} has incorrect transaction_type: ${transactionType} (expected sale/sale_return)`);
             }
             return isCustomer;
           }
@@ -306,7 +307,7 @@ export const GSTTracker = () => {
         taxableAmount: Math.max(0, totalTaxableAmount)
       });
     } catch (error: any) {
-      console.error('Error in fetchGSTData:', error);
+      logger.error('Error in fetchGSTData:', error);
       toast({
         title: "Error",
         description: error?.message || "Failed to load GST data",

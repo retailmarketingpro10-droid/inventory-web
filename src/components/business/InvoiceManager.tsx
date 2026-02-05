@@ -27,6 +27,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { logger } from "@/lib/logger";
 
 interface Invoice {
   id: string;
@@ -225,7 +226,7 @@ export const InvoiceManager = () => {
       if (error) throw error;
       setInvoicePayments((data || []) as unknown as InvoicePayment[]);
     } catch (error) {
-      console.error('Failed to load payments:', error);
+      logger.error('Failed to load payments:', error);
       setInvoicePayments([]);
     }
   }, []);
@@ -354,7 +355,7 @@ export const InvoiceManager = () => {
       
       setBusinessEntities(uniqueEntities);
     } catch (error) {
-      console.error('Failed to load business entities:', error);
+      logger.error('Failed to load business entities:', error);
       toast({
         title: "Error",
         description: "Failed to load business entities",
@@ -377,7 +378,7 @@ export const InvoiceManager = () => {
       const { data, error } = await query.order('name');
 
       if (error) {
-        console.error('Failed to load products:', error);
+        logger.error('Failed to load products:', error);
         toast({
           title: "Error",
           description: "Failed to load products. Please try again.",
@@ -388,7 +389,7 @@ export const InvoiceManager = () => {
       }
       setProducts(data || []);
     } catch (error) {
-      console.error('Failed to load products:', error);
+      logger.error('Failed to load products:', error);
       toast({
         title: "Error",
         description: "Failed to load products. Please try again.",
@@ -427,7 +428,7 @@ export const InvoiceManager = () => {
       if (error) throw error;
       setPurchaseOrders(data || []);
     } catch (error) {
-      console.error('Failed to load purchase orders:', error);
+      logger.error('Failed to load purchase orders:', error);
       toast({
         title: "Error",
         description: "Failed to load purchase orders",
@@ -469,7 +470,7 @@ export const InvoiceManager = () => {
         }
       }
     } catch (error) {
-      console.error('Failed to load PO items:', error);
+      logger.error('Failed to load PO items:', error);
       toast({
         title: "Error",
         description: "Failed to load purchase order items",
@@ -626,7 +627,7 @@ export const InvoiceManager = () => {
       
       toast({ title: "Success", description: "New entity created successfully" });
     } catch (error) {
-      console.error('Failed to create entity:', error);
+      logger.error('Failed to create entity:', error);
       toast({
         title: "Error",
         description: "Failed to create entity",
@@ -766,7 +767,7 @@ export const InvoiceManager = () => {
               .single();
 
             if (retry.error) {
-              console.error('Retry invoice creation error:', retry.error);
+              logger.error('Retry invoice creation error:', retry.error);
               throw retry.error;
             }
             // Overwrite invoice with retry data
@@ -782,7 +783,7 @@ export const InvoiceManager = () => {
           }
         } else {
           // Other database errors
-          console.error('Invoice creation error:', invoiceError);
+          logger.error('Invoice creation error:', invoiceError);
           throw invoiceError;
         }
       } else {
@@ -812,7 +813,7 @@ export const InvoiceManager = () => {
         .insert(itemsToInsert);
 
       if (itemsError) {
-        console.error('Error creating invoice items:', itemsError);
+        logger.error('Error creating invoice items:', itemsError);
         throw new Error(`Failed to create invoice items: ${itemsError.message || 'Unknown error'}`);
       }
 
@@ -862,7 +863,7 @@ export const InvoiceManager = () => {
               const { data: productData, error: fetchErr } = await query.single();
               
               if (fetchErr || !productData) {
-                console.error('Error fetching product stock:', fetchErr);
+                logger.error('Error fetching product stock:', fetchErr);
                 inventoryUpdatesFailed++;
                 toast({
                   title: "Warning",
@@ -909,7 +910,7 @@ export const InvoiceManager = () => {
               const { error: updateError } = await updateQuery;
               
               if (updateError) {
-                console.error('Error updating inventory:', updateError);
+                logger.error('Error updating inventory:', updateError);
                 inventoryUpdatesFailed++;
                 toast({
                   title: "Warning",
@@ -918,14 +919,12 @@ export const InvoiceManager = () => {
                 });
               } else {
                 inventoryUpdatesSuccess++;
-                console.log(`✅ Inventory updated: ${productData.name || productName} ${delta > 0 ? '+' : ''}${delta} (New stock: ${newStock})`);
               }
             } else {
               // Product not found in inventory - this is okay for manual entries
-              console.log(`ℹ️ Product "${item.description}" not found in inventory - skipping stock update`);
             }
           } catch (invError) {
-            console.error('Error updating inventory for item:', item, invError);
+            logger.error('Error updating inventory for item', { item, error: invError });
             inventoryUpdatesFailed++;
             toast({
               title: "Warning",
@@ -945,7 +944,6 @@ export const InvoiceManager = () => {
         }
       } else {
         // For non-inventory invoices (transport, wholesale, labour, other), skip inventory updates
-        console.log(`ℹ️ Skipping inventory update for ${formData.entity_type} invoice (${formData.invoice_type}) - inventory sync only applies to customer/supplier invoices`);
       }
 
       // Create GST entry automatically (skip for return/refund invoices - treat as void)
@@ -1004,7 +1002,7 @@ export const InvoiceManager = () => {
             });
           }
         } catch (gstError) {
-          console.error('GST sync error:', gstError);
+          logger.error('GST sync error:', gstError);
           toast({ 
             title: "Warning", 
             description: "Invoice created but GST entry failed",
@@ -1022,7 +1020,7 @@ export const InvoiceManager = () => {
       resetForm();
       fetchInvoices();
     } catch (error: any) {
-      console.error('Invoice creation error:', error);
+      logger.error('Invoice creation error:', error);
       const errorMessage = error?.message || error?.details || error?.hint || 'Failed to create invoice';
       toast({
         title: "Error",
@@ -1086,7 +1084,7 @@ export const InvoiceManager = () => {
         .maybeSingle();
       
       if (gstError) {
-        console.error('Error fetching GST breakdown:', gstError);
+        logger.error('Error fetching GST breakdown:', gstError);
       } else if (gstData) {
         const gst = gstData as any;
         setInvoiceGSTBreakdown({
@@ -1465,7 +1463,7 @@ export const InvoiceManager = () => {
         .ilike('name', productName);
 
       if (checkError) {
-        console.error('Error checking duplicates:', checkError);
+        logger.error('Error checking duplicates:', checkError);
       }
 
       const duplicate = existingProducts?.some(p => 

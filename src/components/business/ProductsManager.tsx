@@ -24,6 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { logger } from "@/lib/logger";
 
 interface Product {
   id: string;
@@ -132,7 +133,7 @@ export const ProductsManager = () => {
       if (error) throw error;
       setSuppliers(data || []);
     } catch (error) {
-      console.error('Failed to load suppliers:', error);
+      logger.error('Failed to load suppliers:', error);
     }
   };
 
@@ -224,7 +225,7 @@ export const ProductsManager = () => {
         const { data: existingProducts, error: checkError } = await duplicateCheck;
 
         if (checkError) {
-          console.error('Error checking duplicates:', checkError);
+          logger.error('Error checking duplicates:', checkError);
         }
 
         const nameDuplicate = existingProducts?.some(p => 
@@ -294,7 +295,7 @@ export const ProductsManager = () => {
         poCount: poCount || 0
       });
     } catch (error) {
-      console.error('Error checking product usage:', error);
+      logger.error('Error checking product usage:', error);
       setProductUsageInfo({ invoiceCount: 0, poCount: 0 });
     }
     
@@ -316,7 +317,7 @@ export const ProductsManager = () => {
             .eq('product_id', productToDelete);
           
           if (invoiceError) {
-            console.warn('Failed to update invoice_items:', invoiceError);
+            logger.warn('Failed to update invoice_items:', invoiceError);
             // Continue anyway - database constraint might handle it
           }
         }
@@ -329,7 +330,7 @@ export const ProductsManager = () => {
             .eq('product_id', productToDelete);
           
           if (poError) {
-            console.warn('Failed to update purchase_order_items:', poError);
+            logger.warn('Failed to update purchase_order_items:', poError);
             // Continue anyway - database constraint might handle it
           }
         }
@@ -358,7 +359,7 @@ export const ProductsManager = () => {
       setProductToDelete(null);
       setProductUsageInfo(null);
     } catch (error: any) {
-      console.error('Delete product error:', error);
+      logger.error('Delete product error:', error);
       let errorMessage = "Failed to delete product";
       
       if (error.code === '23503' || error.message?.includes('23503')) {

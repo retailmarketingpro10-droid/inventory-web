@@ -10,6 +10,7 @@ import {
   type GSTCalculation 
 } from "@/utils/indianBusiness";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 export function GSTCalculator() {
   const [amount, setAmount] = useState<string>("");
@@ -61,7 +62,7 @@ export function GSTCalculator() {
       setCopied(type);
       setTimeout(() => setCopied(""), 2000);
     } catch (err) {
-      console.error('Failed to copy: ', err);
+      logger.error('Failed to copy: ', err);
     }
   };
 

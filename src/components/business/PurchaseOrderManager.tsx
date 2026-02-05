@@ -27,7 +27,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
- 
+import { logger } from "@/lib/logger";
 
 interface PurchaseOrder {
   id: string;
@@ -213,7 +213,7 @@ export const PurchaseOrderManager = () => {
       // Get current user for RLS compliance
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        console.warn('No user found, cannot fetch suppliers');
+        logger.warn('No user found, cannot fetch suppliers');
         setSuppliers([]);
         return;
       }
@@ -232,7 +232,7 @@ export const PurchaseOrderManager = () => {
         const { data: allSuppliers, error: allError } = await query.order('company_name');
         
         if (allError) {
-          console.error('Error fetching suppliers:', allError);
+          logger.error('Error fetching suppliers:', allError);
           // If OR query fails, try separate queries
           const { data: userSuppliers } = await supabase
             .from('suppliers')
@@ -280,7 +280,7 @@ export const PurchaseOrderManager = () => {
       const { data, error } = await query.order('company_name');
 
       if (error) {
-        console.error('Failed to load suppliers - error:', error);
+        logger.error('Failed to load suppliers - error:', error);
         // Fallback: try separate queries
         const { data: userSuppliers } = await supabase
           .from('suppliers')
@@ -308,7 +308,7 @@ export const PurchaseOrderManager = () => {
       console.log('Loaded suppliers:', validSuppliers.length, 'suppliers (filtered from', data?.length || 0, 'total)');
       setSuppliers(validSuppliers.map(s => ({ id: s.id, company_name: s.company_name })));
     } catch (error) {
-      console.error('Failed to load suppliers:', error);
+      logger.error('Failed to load suppliers:', error);
       setSuppliers([]);
     }
   };
@@ -340,7 +340,7 @@ export const PurchaseOrderManager = () => {
           }
         }
       } catch (error) {
-        console.error('Failed to fetch company state:', error);
+        logger.error('Failed to fetch company state:', error);
       }
     };
 
@@ -352,7 +352,7 @@ export const PurchaseOrderManager = () => {
       // Get current user for RLS compliance
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        console.warn('No user found, cannot fetch products');
+        logger.warn('No user found, cannot fetch products');
         setProducts([]);
         return;
       }
@@ -373,7 +373,7 @@ export const PurchaseOrderManager = () => {
       const { data, error } = await query.order('name');
 
       if (error) {
-        console.error('Failed to load products:', error);
+        logger.error('Failed to load products:', error);
         throw error;
       }
       
@@ -387,7 +387,7 @@ export const PurchaseOrderManager = () => {
         
         // Exclude if it has supplier-specific fields (this means it's from suppliers table, not products)
         if (p.company_name || p.contact_person || p.email || p.phone || p.gstin || p.pan) {
-          console.warn('Filtered out supplier from products (has supplier fields):', p.name || p.company_name);
+          logger.warn('Filtered out supplier from products (has supplier fields):', p.name || p.company_name);
           return false;
         }
         
@@ -395,7 +395,7 @@ export const PurchaseOrderManager = () => {
         const productName = p.name.trim();
         const genericProductPattern = /^product\s+\d+$/i; // Matches "Product 141", "product 142", etc.
         if (genericProductPattern.test(productName)) {
-          console.warn('Filtered out generic/test product:', productName);
+          logger.warn('Filtered out generic/test product:', productName);
           return false;
         }
         
@@ -405,11 +405,11 @@ export const PurchaseOrderManager = () => {
       
       console.log('Loaded products:', validProducts.length, 'products (filtered from', data?.length || 0, 'total)');
       if (data && data.length > validProducts.length) {
-        console.warn('Filtered out', data.length - validProducts.length, 'non-product items from products list');
+        logger.warn('Filtered out', data.length - validProducts.length, 'non-product items from products list');
       }
       setProducts(validProducts);
     } catch (error) {
-      console.error('Failed to load products:', error);
+      logger.error('Failed to load products:', error);
       setProducts([]);
     }
   };
@@ -554,7 +554,7 @@ export const PurchaseOrderManager = () => {
         .single();
 
       if (poError) {
-        console.error('PO creation error:', poError);
+        logger.error('PO creation error:', poError);
         throw poError;
       }
 
@@ -574,7 +574,7 @@ export const PurchaseOrderManager = () => {
         .insert(itemsToInsert);
 
       if (itemsError) {
-        console.error('PO items creation error:', itemsError);
+        logger.error('PO items creation error:', itemsError);
         throw itemsError;
       }
 
@@ -587,7 +587,7 @@ export const PurchaseOrderManager = () => {
 
       // No attachments to upload
     } catch (error: any) {
-      console.error('Purchase order creation error:', error);
+      logger.error('Purchase order creation error:', error);
       const errorMessage = error?.message || error?.details || 'Failed to create purchase order';
       toast({
         title: "Error",
@@ -753,7 +753,7 @@ export const PurchaseOrderManager = () => {
         description: "Purchase order downloaded as PDF"
       });
     } catch (error) {
-      console.error('Error downloading purchase order:', error);
+      logger.error('Error downloading purchase order:', error);
       toast({
         title: "Error",
         description: "Failed to download purchase order",

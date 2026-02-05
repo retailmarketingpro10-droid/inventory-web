@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { logger } from '@/lib/logger';
 
 export interface SubscriptionStatus {
   isActive: boolean;
@@ -62,7 +63,7 @@ export const useSubscription = () => {
       const subscription = subscriptions && subscriptions.length > 0 ? subscriptions[0] : null;
 
       if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
-        console.error('Error fetching subscription:', error);
+        logger.error('Error fetching subscription:', error);
         setSubscriptionStatus({
           isActive: false,
           isExpired: true,
@@ -163,7 +164,7 @@ export const useSubscription = () => {
         loading: false
       });
     } catch (error) {
-      console.error('Error checking subscription:', error);
+      logger.error('Error checking subscription:', error);
       setSubscriptionStatus({
         isActive: false,
         isExpired: true,

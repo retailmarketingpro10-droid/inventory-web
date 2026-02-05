@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -55,7 +56,7 @@ export const useAuth = () => {
         // Ignore sessionStorage errors
       }
     } catch (storageError) {
-      console.warn('Failed to clear storage:', storageError);
+      logger.warn('Failed to clear storage:', storageError);
     }
     
     // Try API signout in background (fire-and-forget, don't wait for it)
@@ -67,7 +68,7 @@ export const useAuth = () => {
       // Silently ignore all signout API errors - we've already cleared local state
       // This is expected in production environments where API calls may fail
       if (process.env.NODE_ENV === 'development') {
-        console.warn('SignOut API call failed (non-blocking):', error);
+        logger.warn('SignOut API call failed (non-blocking):', error);
       }
     });
     

@@ -3,6 +3,7 @@ import { Upload, FileText, AlertCircle, CheckCircle, AlertTriangle, Info, Downlo
 import { parseTallyCSV, generateTallyCompatibleCSV, type TallyProduct, type TallyParseResult } from "@/utils/tallyParser";
 import { formatIndianCurrency } from "@/utils/indianBusiness";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface TallyImportProcessorProps {
   onImportComplete: (products: TallyProduct[]) => void;
@@ -59,7 +60,7 @@ export function TallyImportProcessor({ onImportComplete, onClose }: TallyImportP
       setParseResult(result);
       setCurrentStep('preview');
     } catch (error) {
-      console.error('Error processing file:', error);
+      logger.error('Error processing file:', error);
       alert('Error processing file. Please ensure it\'s a valid CSV, Excel, or JSON file from Tally.');
     } finally {
       setIsProcessing(false);

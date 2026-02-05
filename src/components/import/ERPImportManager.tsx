@@ -12,6 +12,7 @@ import { parseERPData, generateSampleCSV, type ERPParseResult, type ERPProduct, 
 import { parseFileContent, getFileFormatDescription } from "@/utils/fileParser";
 import { formatIndianCurrency } from "@/utils/indianBusiness";
 import { cn } from "@/lib/utils";
+import { logger } from "@/lib/logger";
 
 interface ERPImportManagerProps {
   onClose: () => void;
@@ -83,7 +84,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
         description: `Successfully parsed ${formatDesc} file with ${rows.length} rows`,
       });
     } catch (error) {
-      console.error('Error processing file:', error);
+      logger.error('Error processing file:', error);
       toast({
         title: "Processing Error",
         description: error instanceof Error ? error.message : "Error processing file. Please ensure it's a valid CSV, Excel, or JSON file.",
@@ -176,7 +177,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
               .select('id, company_name, gstin');
 
             if (supplierError) {
-              console.error('Error creating suppliers:', supplierError);
+              logger.error('Error creating suppliers:', supplierError);
             } else {
               suppliersCreatedCount = newSuppliers?.length || 0;
               // Add new suppliers to map
@@ -230,7 +231,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
           .eq('user_id', userData.user.id);
 
         if (checkError) {
-          console.error('Error checking existing products:', checkError);
+          logger.error('Error checking existing products:', checkError);
           // Continue with import but log the error
         }
 
@@ -383,7 +384,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
           .eq('user_id', userData.user.id);
 
         if (checkError) {
-          console.error('Error checking existing suppliers:', checkError);
+          logger.error('Error checking existing suppliers:', checkError);
         }
 
         // Create set of existing supplier names for quick lookup
@@ -463,7 +464,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
           .insert(entitiesToInsert);
 
         if (entitiesError) {
-          console.error('Error inserting business entities:', entitiesError);
+          logger.error('Error inserting business entities:', entitiesError);
           // Continue with suppliers insert even if entities fail
         }
 
@@ -505,7 +506,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
         onImportComplete();
       }
     } catch (error: any) {
-      console.error('Import error:', error);
+      logger.error('Import error:', error);
       toast({
         title: "Import Failed",
         description: error.message || "Failed to import data. Please try again.",
@@ -559,13 +560,13 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
           .order('company_name');
 
         if (error) {
-          console.error('Error fetching suppliers:', error);
+          logger.error('Error fetching suppliers:', error);
           setSuppliers([]);
         } else {
           setSuppliers(data || []);
         }
       } catch (error) {
-        console.error('Error fetching suppliers:', error);
+        logger.error('Error fetching suppliers:', error);
         setSuppliers([]);
       }
     };

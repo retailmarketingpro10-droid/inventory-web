@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
+import { logger } from '@/lib/logger';
 
 export type UserRole = 'owner' | 'manager' | 'employee' | 'viewer';
 
@@ -41,7 +42,7 @@ export const useRoles = () => {
         permissions: ROLE_PERMISSIONS['owner']
       });
     } catch (error) {
-      console.error('Error fetching user role:', error);
+      logger.error('Error fetching user role:', error);
       // Default to owner on error for functionality
       setUserRole({
         role: 'owner',

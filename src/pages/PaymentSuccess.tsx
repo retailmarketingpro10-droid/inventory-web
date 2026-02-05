@@ -6,6 +6,7 @@ import { CheckCircle, ArrowRight, Receipt, Calendar, IndianRupee, PartyPopper, L
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { logger } from '@/lib/logger';
 
 export default function PaymentSuccess() {
   const navigate = useNavigate();
@@ -39,7 +40,7 @@ export default function PaymentSuccess() {
           .maybeSingle();
 
         if (fetchError) {
-          console.error('Error fetching subscription:', fetchError);
+          logger.error('Error fetching subscription:', fetchError);
           setUpdateError('Could not find your subscription. Please contact support.');
           setUpdating(false);
           return;
@@ -72,7 +73,7 @@ export default function PaymentSuccess() {
             .eq('id', pendingSubscription.id);
 
           if (updateError) {
-            console.error('Error updating subscription:', updateError);
+            logger.error('Error updating subscription:', updateError);
             setUpdateError('Payment received but could not update subscription. Please contact support.');
           }
 
@@ -83,7 +84,7 @@ export default function PaymentSuccess() {
             .eq('id', user.id);
         }
       } catch (error) {
-        console.error('Error processing payment success:', error);
+        logger.error('Error processing payment success:', error);
         setUpdateError('An error occurred. Your payment was received - please contact support if your subscription is not active.');
       } finally {
         setUpdating(false);

@@ -31,6 +31,8 @@ import {
 import { ReportPDF } from '@/components/pdf/ReportPDF';
 import { pdf } from '@react-pdf/renderer';
 import { downloadReportAsCSV } from '@/utils/pdfGenerator';
+import { logger } from '@/lib/logger';
+import { ReportChat } from '@/components/reports/ReportChat';
 
 interface ReportRow {
   subcategory: string;
@@ -114,6 +116,23 @@ export const ReportsManager: React.FC = () => {
   const [generatedTime, setGeneratedTime] = useState<string>('');
   const { toast } = useToast();
 
+  // Build a compact context object that can be passed to the AI assistant.
+  const reportContext = selectedCompany
+    ? {
+        reportId: selectedReport,
+        reportName: REPORT_TYPES.find((r) => r.id === selectedReport)?.name,
+        company: {
+          id: (selectedCompany as any).id,
+          name: selectedCompany.company_name,
+        },
+        period: {
+          from: dateFrom,
+          to: dateTo,
+        },
+        summary,
+        sampleRows: reportData.slice(0, 100),
+      }
+    : null;
 
   // Generate report when dependencies change
   useEffect(() => {
@@ -177,7 +196,7 @@ export const ReportsManager: React.FC = () => {
             .lte('invoice_date', dateTo);
 
           if (salesError) {
-            console.error('Error fetching sales invoices:', salesError);
+            logger.error('Error fetching sales invoices:', salesError);
           }
 
           // Fetch sale return invoices
@@ -199,7 +218,7 @@ export const ReportsManager: React.FC = () => {
             .lte('invoice_date', dateTo);
 
           if (purchaseError) {
-            console.error('Error fetching purchase invoices:', purchaseError);
+            logger.error('Error fetching purchase invoices:', purchaseError);
           }
 
           // Fetch purchase return invoices
@@ -282,7 +301,7 @@ export const ReportsManager: React.FC = () => {
             .eq('company_id', selectedCompany.company_name);
 
           if (productsError) {
-            console.error('Error fetching products for opening stock:', productsError);
+            logger.error('Error fetching products for opening stock:', productsError);
           }
 
           // Calculate Opening Stock at the beginning of the period (dateFrom)
@@ -472,7 +491,7 @@ export const ReportsManager: React.FC = () => {
           const { data: { user } } = await supabase.auth.getUser();
           
           if (!user?.id) {
-            console.warn('No user ID found for ledger entries query');
+            logger.warn('No user ID found for ledger entries query');
           }
           
           // First get ledger IDs for the company
@@ -482,7 +501,7 @@ export const ReportsManager: React.FC = () => {
             .eq('company_id', selectedCompany.company_name);
           
           if (ledgersError) {
-            console.error('Error fetching ledgers for company:', ledgersError);
+            logger.error('Error fetching ledgers for company:', ledgersError);
           }
           
           const ledgerIds = (companyLedgers || []).map(l => l.id);
@@ -503,7 +522,7 @@ export const ReportsManager: React.FC = () => {
               .lte('entry_date', dateTo);
             
             if (entriesError) {
-              console.error('Error fetching ledger entries:', entriesError);
+              logger.error('Error fetching ledger entries:', entriesError);
             } else {
               console.log(`Found ${(entriesData || []).length} ledger entries in date range`);
             }
@@ -515,9 +534,9 @@ export const ReportsManager: React.FC = () => {
               ledger_type: ledgerTypeMap.get(entry.ledger_id)
             }));
           } else if (ledgerIds.length === 0) {
-            console.warn('No ledgers found for company, cannot fetch ledger entries');
+            logger.warn('No ledgers found for company, cannot fetch ledger entries');
           } else if (!user?.id) {
-            console.warn('No user ID, cannot fetch ledger entries');
+            logger.warn('No user ID, cannot fetch ledger entries');
           }
 
           // Calculate indirect income and expenses from ledgers separately
@@ -662,7 +681,7 @@ export const ReportsManager: React.FC = () => {
             .order('invoice_date', { ascending: false });
 
           if (salesDataError) {
-            console.error('Error fetching sales report data:', salesDataError);
+            logger.error('Error fetching sales report data:', salesDataError);
             toast({
               title: "Error",
               description: "Failed to fetch sales data: " + salesDataError.message,
@@ -692,7 +711,7 @@ export const ReportsManager: React.FC = () => {
             .order('invoice_date', { ascending: false });
 
           if (returnError) {
-            console.error('Error fetching sale returns:', returnError);
+            logger.error('Error fetching sale returns:', returnError);
           }
 
           console.log('Sales report invoices found:', salesData?.length || 0, 'Returns:', saleReturns?.length || 0);
@@ -784,7 +803,7 @@ export const ReportsManager: React.FC = () => {
             .order('order_date', { ascending: false });
 
           if (poError) {
-            console.error('Error fetching purchase orders:', poError);
+            logger.error('Error fetching purchase orders:', poError);
           }
 
           // Fetch purchase invoices
@@ -809,7 +828,7 @@ export const ReportsManager: React.FC = () => {
             .order('invoice_date', { ascending: false });
 
           if (invoiceError) {
-            console.error('Error fetching purchase invoices:', invoiceError);
+            logger.error('Error fetching purchase invoices:', invoiceError);
             toast({
               title: "Error",
               description: "Failed to fetch purchase invoices: " + invoiceError.message,
@@ -839,7 +858,7 @@ export const ReportsManager: React.FC = () => {
             .order('invoice_date', { ascending: false });
 
           if (returnError) {
-            console.error('Error fetching purchase returns:', returnError);
+            logger.error('Error fetching purchase returns:', returnError);
           }
 
           // Map purchase orders
@@ -949,7 +968,7 @@ export const ReportsManager: React.FC = () => {
             .order('invoice_date', { ascending: false });
 
           if (agingError) {
-            console.error('Error fetching aging invoices:', agingError);
+            logger.error('Error fetching aging invoices:', agingError);
             toast({
               title: "Error",
               description: "Failed to fetch aging invoices: " + agingError.message,
@@ -972,7 +991,7 @@ export const ReportsManager: React.FC = () => {
                 .order('payment_date', { ascending: false });
 
               if (paymentsError) {
-                console.error('Error fetching invoice payments:', paymentsError);
+                logger.error('Error fetching invoice payments:', paymentsError);
               } else {
                 (paymentsData || []).forEach(payment => {
                   const current = paymentsMap.get(payment.invoice_id) || 0;
@@ -1080,7 +1099,7 @@ export const ReportsManager: React.FC = () => {
               .eq('user_id', user.id);
 
             if (ledgersError) {
-              console.error('Error fetching ledgers:', ledgersError);
+              logger.error('Error fetching ledgers:', ledgersError);
               throw ledgersError;
             }
 
@@ -1100,7 +1119,7 @@ export const ReportsManager: React.FC = () => {
                 .lte('entry_date', dateTo);
 
               if (entriesError) {
-                console.error('Error fetching ledger entries:', entriesError);
+                logger.error('Error fetching ledger entries:', entriesError);
                 // Continue with empty entries if fetch fails
               } else {
                 (entriesData || []).forEach(entry => {
@@ -1180,7 +1199,7 @@ export const ReportsManager: React.FC = () => {
               });
             }
           } catch (error: any) {
-            console.error('Trial balance error:', error);
+            logger.error('Trial balance error:', error);
             toast({
               title: "Error",
               description: error.message || "Failed to generate trial balance report",
@@ -1237,7 +1256,7 @@ export const ReportsManager: React.FC = () => {
               .order('invoice_date', { ascending: false });
             
             if (error) {
-              console.error('Error fetching GST data:', error);
+              logger.error('Error fetching GST data:', error);
               throw error;
             } else {
               gstData = data || [];
@@ -1339,7 +1358,7 @@ export const ReportsManager: React.FC = () => {
               netIGST
             };
           } catch (error: any) {
-            console.error('GST report error:', error);
+            logger.error('GST report error:', error);
             toast({
               title: "Error",
               description: error?.message || "Failed to generate GST report",
@@ -1377,7 +1396,7 @@ export const ReportsManager: React.FC = () => {
               .eq('ledger_type', 'payables');
 
             if (payableError) {
-              console.error('Error fetching payable ledgers:', payableError);
+              logger.error('Error fetching payable ledgers:', payableError);
             }
 
             // Fetch receivable ledgers (accounts receivable)
@@ -1388,7 +1407,7 @@ export const ReportsManager: React.FC = () => {
               .eq('ledger_type', 'receivables');
 
             if (receivableError) {
-              console.error('Error fetching receivable ledgers:', receivableError);
+              logger.error('Error fetching receivable ledgers:', receivableError);
             }
 
           // Fetch ledger entries for payable and receivable ledgers
@@ -1502,7 +1521,7 @@ export const ReportsManager: React.FC = () => {
           };
           console.log(`Payment report: ${sampleData.length} entries found`);
           } catch (error: any) {
-            console.error('Payment report error:', error);
+            logger.error('Payment report error:', error);
             toast({
               title: "Error",
               description: error?.message || "Failed to generate payment report",
@@ -1539,7 +1558,7 @@ export const ReportsManager: React.FC = () => {
               .eq('user_id', user.id);
 
             if (ledgersError) {
-              console.error('Error fetching ledgers:', ledgersError);
+              logger.error('Error fetching ledgers:', ledgersError);
               throw ledgersError;
             }
 
@@ -1556,7 +1575,7 @@ export const ReportsManager: React.FC = () => {
                 .eq('user_id', user.id);
 
               if (entriesError) {
-                console.error('Error fetching ledger entries:', entriesError);
+                logger.error('Error fetching ledger entries:', entriesError);
               } else {
                 (entriesData || []).forEach(entry => {
                   const ledgerId = entry.ledger_id;
@@ -1633,7 +1652,7 @@ export const ReportsManager: React.FC = () => {
               });
             }
           } catch (error: any) {
-            console.error('Ledger summary error:', error);
+            logger.error('Ledger summary error:', error);
             toast({
               title: "Error",
               description: error.message || "Failed to generate ledger summary report",
@@ -1675,7 +1694,7 @@ export const ReportsManager: React.FC = () => {
               .order('invoice_date', { ascending: false });
 
             if (saleReturnsError) {
-              console.error('Error fetching sale returns:', saleReturnsError);
+              logger.error('Error fetching sale returns:', saleReturnsError);
               throw saleReturnsError;
             }
 
@@ -1701,7 +1720,7 @@ export const ReportsManager: React.FC = () => {
               .order('invoice_date', { ascending: false });
 
             if (purchaseReturnsError) {
-              console.error('Error fetching purchase returns:', purchaseReturnsError);
+              logger.error('Error fetching purchase returns:', purchaseReturnsError);
               throw purchaseReturnsError;
             }
 
@@ -1781,7 +1800,7 @@ export const ReportsManager: React.FC = () => {
 
             console.log(`Return report: Found ${saleReturnRows.length} sale returns and ${purchaseReturnRows.length} purchase returns`);
           } catch (error: any) {
-            console.error('Error in return-void-report:', error);
+            logger.error('Error in return-void-report:', error);
             toast({
               title: "Error",
               description: error.message || "Failed to fetch return invoices. Please try again.",
@@ -1809,7 +1828,7 @@ export const ReportsManager: React.FC = () => {
               .order('name', { ascending: true });
 
             if (productsError) {
-              console.error('Error fetching products:', productsError);
+              logger.error('Error fetching products:', productsError);
               throw productsError;
             }
 
@@ -1849,7 +1868,7 @@ export const ReportsManager: React.FC = () => {
 
             console.log(`Inventory report: Found ${totalProducts} products, Total stock value: ${totalStockValue}`);
           } catch (error: any) {
-            console.error('Error in inventory-report:', error);
+            logger.error('Error in inventory-report:', error);
             toast({
               title: "Error",
               description: error.message || "Failed to fetch inventory data. Please try again.",
@@ -1906,7 +1925,7 @@ export const ReportsManager: React.FC = () => {
       }
       
     } catch (error: any) {
-      console.error('Error generating report:', error);
+      logger.error('Error generating report:', error);
       toast({
         title: "Error",
         description: error.message || "Failed to generate report. Please try again.",
@@ -2185,7 +2204,7 @@ export const ReportsManager: React.FC = () => {
         });
       }
     } catch (error) {
-      console.error('Error exporting report:', error);
+      logger.error('Error exporting report:', error);
       toast({
         title: "Error",
         description: "Failed to export report",
@@ -3017,6 +3036,9 @@ export const ReportsManager: React.FC = () => {
               </div>
             </CardContent>
           </Card>
+
+          {/* AI Report Assistant */}
+          <ReportChat reportContext={reportContext} />
         </div>
       )}
 

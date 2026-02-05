@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { calculateGSTBreakdown, GSTConfig } from '@/utils/gstBreakdown';
+import { logger } from '@/lib/logger';
 
 export interface InvoiceGSTData {
   invoice_id: string;
@@ -93,7 +94,7 @@ export class GSTSyncService {
         gst_entry_id: gstEntry.id 
       };
     } catch (error) {
-      console.error('Error creating GST entry from invoice:', error);
+      logger.error('Error creating GST entry from invoice:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
@@ -145,7 +146,7 @@ export class GSTSyncService {
 
       return { success: true };
     } catch (error) {
-      console.error('Error updating GST entry from invoice:', error);
+      logger.error('Error updating GST entry from invoice:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
@@ -224,7 +225,7 @@ export class GSTSyncService {
 
       return { success: true };
     } catch (error) {
-      console.error('Error updating GST entry amounts:', error);
+      logger.error('Error updating GST entry amounts:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
@@ -246,7 +247,7 @@ export class GSTSyncService {
 
       return { success: true };
     } catch (error) {
-      console.error('Error deleting GST entry from invoice:', error);
+      logger.error('Error deleting GST entry from invoice:', error);
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
@@ -267,7 +268,7 @@ export class GSTSyncService {
       if (error) throw error;
       return data;
     } catch (error) {
-      console.error('Error fetching GST entries for invoice:', error);
+      logger.error('Error fetching GST entries for invoice:', error);
       return [];
     }
   }
@@ -342,7 +343,7 @@ export class GSTSyncService {
         return data;
       }
     } catch (error) {
-      console.error('Error fetching entity details:', error);
+      logger.error('Error fetching entity details:', error);
       return null;
     }
   }
@@ -403,7 +404,7 @@ export class GSTSyncService {
 
       return results;
     } catch (error) {
-      console.error('Error syncing all invoices with GST:', error);
+      logger.error('Error syncing all invoices with GST:', error);
       return [];
     }
   }

@@ -31,13 +31,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { logger } from "@/lib/logger";
 
 // Lazy load components for better performance
 const ImportModal = lazy(() => 
   import("@/components/inventory/ImportModal")
     .then(m => ({ default: m.ImportModal }))
     .catch((error) => {
-      console.error('Failed to load ImportModal:', error);
+      logger.error('Failed to load ImportModal:', error);
       // Return a fallback component
       return { default: () => <div>Failed to load import modal. Please refresh the page.</div> };
     })
@@ -151,7 +152,7 @@ const Index = () => {
         setCompanies([]);
       }
     } catch (error) {
-      console.error('Failed to load companies:', error);
+      logger.error('Failed to load companies:', error);
       toast.error('Failed to load companies');
     }
   };
@@ -209,7 +210,7 @@ const Index = () => {
         totalInvoices: totalInvoicesCount,
       });
     } catch (error) {
-      console.error('Failed to load dashboard data:', error);
+      logger.error('Failed to load dashboard data:', error);
     }
   }, [selectedCompany, user]);
 
@@ -332,7 +333,7 @@ const Index = () => {
         }
       }
     } catch (error: any) {
-      console.error('Failed to add company:', error);
+      logger.error('Failed to add company:', error);
       toast.error(error.message || 'Failed to add company');
     } finally {
       setIsSavingCompany(false);
@@ -385,7 +386,7 @@ const Index = () => {
       // Refresh companies list
       await fetchCompanies();
     } catch (error: any) {
-      console.error('Failed to delete company:', error);
+      logger.error('Failed to delete company:', error);
       toast.error(error.message || 'Failed to delete company');
     }
   };

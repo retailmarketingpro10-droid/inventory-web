@@ -38,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { logger } from "@/lib/logger";
 
 interface LedgerEntry {
   id: string;
@@ -154,7 +155,7 @@ export const LedgerManager = () => {
         }
       }
     } catch (error) {
-      console.error('Error calculating stats:', error);
+      logger.error('Error calculating stats:', error);
     }
     
     setStats({
@@ -236,13 +237,13 @@ export const LedgerManager = () => {
         .order('entry_date', { ascending: false });
 
       if (error) {
-        console.error('Error fetching ledger entries:', error);
+        logger.error('Error fetching ledger entries:', error);
         throw error;
       }
       
       setLedgerEntries(data || []);
     } catch (error: any) {
-      console.error('Failed to load ledger entries:', error);
+      logger.error('Failed to load ledger entries:', error);
       toast({
         title: "Error",
         description: error?.message || "Failed to load ledger entries",

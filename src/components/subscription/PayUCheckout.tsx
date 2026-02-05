@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
+import { logger } from '@/lib/logger';
 import { Loader2, CreditCard, Shield, Lock } from 'lucide-react';
 
 // PayU Configuration from environment
@@ -166,7 +167,7 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
         });
 
       if (subscriptionError) {
-        console.error('Error creating pending subscription:', subscriptionError);
+        logger.error('Error creating pending subscription:', subscriptionError);
         // Continue anyway - we'll handle it after payment
       }
 
@@ -222,7 +223,7 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
       });
 
     } catch (error: any) {
-      console.error('Payment initiation error:', error);
+      logger.error('Payment initiation error:', error);
       setLoading(false);
       
       toast({

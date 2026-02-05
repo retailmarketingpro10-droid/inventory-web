@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Save, Building } from "lucide-react";
+import { logger } from "@/lib/logger";
 
 interface CompanyDetails {
   name: string;
@@ -112,7 +113,7 @@ export const CompanySettings = () => {
         }
       }
     } catch (error) {
-      console.error('Failed to load company details:', error);
+      logger.error('Failed to load company details:', error);
       toast({
         title: "Error",
         description: "Failed to load company details",
@@ -258,7 +259,7 @@ export const CompanySettings = () => {
         currency: updatedBusinessEntity.currency || "INR"
       });
     } catch (error) {
-      console.error('Save error:', error);
+      logger.error('Save error:', error);
       toast({
         title: "Error",
         description: "Failed to update company details",
