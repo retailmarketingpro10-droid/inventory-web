@@ -28,10 +28,21 @@ interface AskReportAIParams {
   attachments?: AIReportAttachment[];
 }
 
-// Default Gemini model. Can be overridden by VITE_GEN_AI_MODEL_ID if needed.
-const GEMINI_MODEL =
+// Base model name from env, or a broadly available default.
+// Use a concrete model ID (no "-latest" alias) as recommended by the docs.
+const RAW_MODEL_ID =
   (import.meta.env.VITE_GEN_AI_MODEL_ID as string | undefined) ||
-  "gemini-1.5-flash-latest";
+  "gemini-1.5-flash";
+
+// Normalized resource name used in the URL.
+const GEMINI_MODEL = RAW_MODEL_ID.startsWith("models/")
+  ? RAW_MODEL_ID
+  : `models/${RAW_MODEL_ID}`;
+
+export interface KeyStatusResult {
+  ok: boolean;
+  message: string;
+}
 
 export async function askReportAI(params: AskReportAIParams): Promise<string> {
   const { question, reportContext, history, attachments = [] } = params;
@@ -130,7 +141,8 @@ export async function askReportAI(params: AskReportAIParams): Promise<string> {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
+      // Use the v1beta Generative Language endpoint (Gemini API).
+      `https://generativelanguage.googleapis.com/v1beta/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
         apiKey
       )}`,
       {
@@ -144,15 +156,24 @@ export async function askReportAI(params: AskReportAIParams): Promise<string> {
       }
     );
 
+    const text = await response.text();
+
     if (!response.ok) {
-      const errorText = await response.text();
-      logger.error("Gemini API error response:", errorText);
+      let apiMessage = text;
+      try {
+        const parsed = JSON.parse(text);
+        apiMessage = parsed?.error?.message || text;
+      } catch {
+        // ignore JSON parse errors and use raw text
+      }
+
+      logger.error("Gemini API error response:", text);
       throw new Error(
-        `Gemini API error (${response.status}): ${response.statusText}`
+        `Gemini API error (${response.status}): ${apiMessage}`
       );
     }
 
-    const data = await response.json();
+    const data = text ? JSON.parse(text) : {};
     const candidate = data?.candidates?.[0];
     const parts = candidate?.content?.parts || [];
     const answer =
@@ -167,6 +188,67 @@ export async function askReportAI(params: AskReportAIParams): Promise<string> {
     throw new Error(
       error?.message || "Failed to get a response from the AI service."
     );
+  }
+}
+
+export async function checkGeminiKey(): Promise<KeyStatusResult> {
+  const apiKey = import.meta.env.VITE_GEN_AI_API_KEY as string | undefined;
+
+  if (!apiKey) {
+    return {
+      ok: false,
+      message: "VITE_GEN_AI_API_KEY is not configured in the environment.",
+    };
+  }
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=${encodeURIComponent(
+        apiKey
+      )}`
+    );
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      let apiMessage = text;
+      try {
+        const parsed = JSON.parse(text);
+        apiMessage = parsed?.error?.message || text;
+      } catch {
+        // ignore parse errors
+      }
+
+      return {
+        ok: false,
+        message: `Gemini API error (${response.status}): ${apiMessage}`,
+      };
+    }
+
+    // Basic sanity check: response should contain a "models" array
+    const data = text ? JSON.parse(text) : {};
+    const models = data?.models;
+
+    if (Array.isArray(models) && models.length > 0) {
+      const firstName = models[0]?.name || "unknown model";
+      return {
+        ok: true,
+        message: `API key is valid. Example model: ${firstName}`,
+      };
+    }
+
+    return {
+      ok: true,
+      message: "API key is valid, but no models were returned.",
+    };
+  } catch (error: any) {
+    logger.error("Error checking Gemini API key:", error);
+    return {
+      ok: false,
+      message:
+        error?.message ||
+        "Failed to contact the Gemini API to verify the key.",
+    };
   }
 }
 

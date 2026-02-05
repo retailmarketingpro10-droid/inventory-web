@@ -32,7 +32,7 @@ import { ReportPDF } from '@/components/pdf/ReportPDF';
 import { pdf } from '@react-pdf/renderer';
 import { downloadReportAsCSV } from '@/utils/pdfGenerator';
 import { logger } from '@/lib/logger';
-import { ReportChat } from '@/components/reports/ReportChat';
+import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
 
 interface ReportRow {
   subcategory: string;
@@ -3037,8 +3037,6 @@ export const ReportsManager: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* AI Report Assistant */}
-          <ReportChat reportContext={reportContext} />
         </div>
       )}
 
@@ -3050,6 +3048,9 @@ export const ReportsManager: React.FC = () => {
           </CardContent>
         </Card>
       )}
+
+      {/* Floating AI Report Assistant widget (bottom-right) */}
+      <ReportChatWidget reportContext={reportContext} />
     </div>
   );
 };

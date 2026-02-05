@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Paperclip, Send, Loader2, Image as ImageIcon, FileText } from "lucide-react";
-import { askReportAI, AIChatMessage, AIReportAttachment } from "@/services/aiReportService";
+import { Paperclip, Send, Loader2, Image as ImageIcon, FileText, ShieldCheck } from "lucide-react";
+import { askReportAI, AIChatMessage, AIReportAttachment, checkGeminiKey, KeyStatusResult } from "@/services/aiReportService";
 import { useToast } from "@/hooks/use-toast";
 
 interface ReportChatProps {
@@ -26,6 +26,8 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
+  const [keyStatusMessage, setKeyStatusMessage] = useState<string>("");
   const { toast } = useToast();
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -93,6 +95,29 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
     return attachments;
   };
 
+  const handleCheckKey = async () => {
+    setKeyStatus("checking");
+    setKeyStatusMessage("");
+    try {
+      const result: KeyStatusResult = await checkGeminiKey();
+      if (result.ok) {
+        setKeyStatus("valid");
+      } else {
+        setKeyStatus("invalid");
+      }
+      setKeyStatusMessage(result.message);
+    } catch (error: any) {
+      setKeyStatus("invalid");
+      const msg = error?.message || "Failed to check API key.";
+      setKeyStatusMessage(msg);
+      toast({
+        title: "API key check failed",
+        description: msg,
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed && files.length === 0) {
@@ -134,8 +159,6 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
-      setInput("");
-      setFiles([]);
     } catch (error: any) {
       console.error("AI chat error:", error);
       toast({
@@ -146,21 +169,103 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
       });
     } finally {
       setIsLoading(false);
+      // Always clear the composer after a send attempt
+      setInput("");
+      setFiles([]);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Press Enter to send, Shift+Enter for newline
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!isLoading) {
+        void handleSend();
+      }
+    }
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+
+    const newFiles: File[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === "file") {
+        const file = item.getAsFile();
+        if (file) {
+          newFiles.push(file);
+        }
+      }
+    }
+
+    if (newFiles.length > 0) {
+      // Prevent pasting binary data as text into the textarea
+      event.preventDefault();
+      setFiles((prev) => [...prev, ...newFiles]);
     }
   };
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>AI Report Assistant (Gemini)</CardTitle>
-        <CardDescription>
-          Ask questions about this report or attach related files/screenshots. The AI will use the
-          current report data and your files to explain and answer.
-        </CardDescription>
+      <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <CardTitle>AI Report Assistant (Gemini)</CardTitle>
+          <CardDescription>
+            Ask questions about this report or attach related files/screenshots. The AI will use the
+            current report data and your files to explain and answer.
+          </CardDescription>
+        </div>
+        <div className="flex flex-col items-start md:items-end gap-1 text-xs">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="flex items-center gap-1"
+            onClick={handleCheckKey}
+            disabled={keyStatus === "checking"}
+          >
+            {keyStatus === "checking" ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Checking key...
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="h-3 w-3" />
+                Check API key
+              </>
+            )}
+          </Button>
+          {keyStatus !== "idle" && (
+            <span
+              className={
+                keyStatus === "valid"
+                  ? "text-green-500"
+                  : keyStatus === "invalid"
+                  ? "text-destructive"
+                  : "text-muted-foreground"
+              }
+            >
+              {keyStatus === "valid"
+                ? "API key is valid."
+                : keyStatus === "invalid"
+                ? "API key is invalid or not working."
+                : ""}
+            </span>
+          )}
+          {keyStatusMessage && (
+            <span className="max-w-xs text-muted-foreground text-[0.7rem] text-right">
+              {keyStatusMessage}
+            </span>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="border rounded-md h-64 md:h-72 bg-muted/40">
-          <ScrollArea className="h-full p-3 space-y-3">
+        <div className="border rounded-lg h-64 md:h-72 bg-muted/40">
+          <ScrollArea className="h-full p-4 space-y-3">
             {messages.map((message, index) => (
               <div
                 key={index}
@@ -169,10 +274,10 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm whitespace-pre-wrap ${
                     message.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-background border border-border"
+                      ? "bg-primary text-primary-foreground rounded-br-none"
+                      : "bg-background border border-border rounded-bl-none"
                   }`}
                 >
                   {message.content}
@@ -183,83 +288,99 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
         </div>
 
         {files.length > 0 && (
-          <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            {files.map((file, index) => (
-              <div
-                key={`${file.name}-${index}`}
-                className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted"
-              >
-                {file.type.startsWith("image/") ? (
-                  <ImageIcon className="h-3 w-3" />
-                ) : (
-                  <FileText className="h-3 w-3" />
-                )}
-                <span className="max-w-[150px] truncate">{file.name}</span>
-                <button
-                  type="button"
-                  onClick={() => removeFile(index)}
-                  className="ml-1 text-xs hover:text-destructive"
-                  aria-label={`Remove ${file.name}`}
+          <div className="mt-1 flex flex-wrap gap-3">
+            {files.map((file, index) =>
+              file.type.startsWith("image/") ? (
+                <div
+                  key={`${file.name}-${index}`}
+                  className="relative w-20 h-20 rounded-md border bg-background overflow-hidden"
                 >
-                  ×
-                </button>
-              </div>
-            ))}
+                  <img
+                    src={URL.createObjectURL(file)}
+                    alt={file.name}
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    className="absolute top-1 right-1 rounded-full bg-black/60 text-white text-[10px] px-1"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={`${file.name}-${index}`}
+                  className="flex items-center gap-2 px-2 py-1 rounded-md border bg-background text-xs max-w-xs"
+                >
+                  <FileText className="h-3 w-3" />
+                  <span className="truncate">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFile(index)}
+                    className="ml-auto text-destructive"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    ×
+                  </button>
+                </div>
+              )
+            )}
           </div>
         )}
 
-        <div className="flex flex-col md:flex-row gap-2">
-          <div className="flex-1">
+        <div className="flex flex-col gap-2">
+          <div className="relative">
             <Textarea
-              rows={2}
+              rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about totals, trends, definitions, or upload a report screenshot/file..."
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder="Ask about totals, trends, definitions, or upload/paste a report screenshot/file..."
+              className="w-full rounded-full bg-background border px-10 pr-20 py-2 resize-none leading-relaxed"
             />
-          </div>
-          <div className="flex md:flex-col gap-2 md:w-32">
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="shrink-0"
-                onClick={() => {
-                  const inputEl = document.getElementById(
-                    "report-chat-file-input"
-                  ) as HTMLInputElement | null;
-                  inputEl?.click();
-                }}
-              >
-                <Paperclip className="h-4 w-4" />
-              </Button>
-              <Input
-                id="report-chat-file-input"
-                type="file"
-                className="hidden"
-                multiple
-                accept="image/*,.csv,.tsv,.txt,.json,.pdf,.xlsx,.xls"
-                onChange={handleFileChange}
-              />
-            </div>
-            <Button
+
+            {/* Attach (image / file) button inside the input on the left */}
+            <button
               type="button"
-              className="shrink-0"
+              onClick={() => {
+                const inputEl = document.getElementById(
+                  "report-chat-file-input"
+                ) as HTMLInputElement | null;
+                inputEl?.click();
+              }}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label="Attach image or file"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+
+            {/* Hidden file input triggered by the paperclip button */}
+            <Input
+              id="report-chat-file-input"
+              type="file"
+              className="hidden"
+              multiple
+              accept="image/*,.csv,.tsv,.txt,.json,.pdf,.xlsx,.xls"
+              onChange={handleFileChange}
+            />
+
+            {/* Send icon button inside the input on the right */}
+            <button
+              type="button"
               onClick={handleSend}
               disabled={isLoading}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-primary hover:text-primary/80 disabled:opacity-50"
+              aria-label="Send message"
             >
               {isLoading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Thinking...
-                </>
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <>
-                  <Send className="h-4 w-4 mr-2" />
-                  Ask AI
-                </>
+                <Send className="h-4 w-4" />
               )}
-            </Button>
+            </button>
           </div>
         </div>
       </CardContent>
