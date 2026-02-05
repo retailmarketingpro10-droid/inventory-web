@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Paperclip, Send, Loader2, Image as ImageIcon, FileText, ShieldCheck } from "lucide-react";
 import { askReportAI, AIChatMessage, AIReportAttachment, checkGeminiKey, KeyStatusResult } from "@/services/aiReportService";
@@ -175,7 +174,9 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
     // Press Enter to send, Shift+Enter for newline
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -185,7 +186,9 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
     }
   };
 
-  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (
+    event: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
     const items = event.clipboardData?.items;
     if (!items) return;
 
@@ -209,14 +212,12 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
   };
 
   return (
-    <Card>
-      <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <Card className="bg-card/95 border border-border/70 shadow-lg rounded-2xl overflow-hidden">
+      <CardHeader className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between pb-2">
         <div>
-          <CardTitle>AI Report Assistant (Gemini)</CardTitle>
-          <CardDescription>
-            Ask questions about this report or attach related files/screenshots. The AI will use the
-            current report data and your files to explain and answer.
-          </CardDescription>
+          <CardTitle className="text-base font-semibold tracking-tight">
+            AI Report Assistant
+          </CardTitle>
         </div>
         <div className="flex flex-col items-start md:items-end gap-1 text-xs">
           <Button
@@ -263,9 +264,9 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
           )}
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="border rounded-lg h-64 md:h-72 bg-muted/40">
-          <ScrollArea className="h-full p-4 space-y-3">
+      <CardContent className="space-y-3 pt-1">
+        <div className="border border-border/70 rounded-2xl h-80 md:h-[26rem] bg-background/90">
+          <ScrollArea className="h-full p-4 space-y-2.5">
             {messages.map((message, index) => (
               <div
                 key={index}
@@ -274,10 +275,10 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm whitespace-pre-wrap ${
+                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-snug whitespace-pre-wrap ${
                     message.role === "user"
                       ? "bg-primary text-primary-foreground rounded-br-none"
-                      : "bg-background border border-border rounded-bl-none"
+                      : "bg-muted text-muted-foreground rounded-bl-none border border-border/60"
                   }`}
                 >
                   {message.content}
@@ -330,19 +331,9 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
           </div>
         )}
 
-        <div className="flex flex-col gap-2">
-          <div className="relative">
-            <Textarea
-              rows={1}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder="Ask about totals, trends, definitions, or upload/paste a report screenshot/file..."
-              className="w-full rounded-full bg-background border px-10 pr-20 py-2 resize-none leading-relaxed"
-            />
-
-            {/* Attach (image / file) button inside the input on the left */}
+        <div className="flex flex-col gap-2 pt-1">
+          <div className="flex items-center gap-2">
+            {/* Attach (image / file) button on the left, outside the input */}
             <button
               type="button"
               onClick={() => {
@@ -351,10 +342,10 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
                 ) as HTMLInputElement | null;
                 inputEl?.click();
               }}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/80 text-muted-foreground hover:text-foreground hover:bg-background"
               aria-label="Attach image or file"
             >
-              <Paperclip className="h-4 w-4" />
+              <Paperclip className="h-3 w-3" />
             </button>
 
             {/* Hidden file input triggered by the paperclip button */}
@@ -367,18 +358,29 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
               onChange={handleFileChange}
             />
 
-            {/* Send icon button inside the input on the right */}
+            {/* Thin input pill (single-line) */}
+            <Input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              placeholder="Ask AI..."
+              className="flex-1 h-6 rounded-full bg-background/95 border border-border/60 px-3 text-[10px] leading-none whitespace-nowrap overflow-x-auto"
+            />
+
+            {/* Send icon button on the right, outside the input */}
             <button
               type="button"
               onClick={handleSend}
               disabled={isLoading}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-primary hover:text-primary/80 disabled:opacity-50"
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               aria-label="Send message"
             >
               {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
-                <Send className="h-4 w-4" />
+                <Send className="h-3 w-3" />
               )}
             </button>
           </div>
