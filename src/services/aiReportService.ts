@@ -28,7 +28,10 @@ interface AskReportAIParams {
   attachments?: AIReportAttachment[];
 }
 
-const GEMINI_MODEL = "gemini-1.5-flash";
+// Default Gemini model. Can be overridden by VITE_GEN_AI_MODEL_ID if needed.
+const GEMINI_MODEL =
+  (import.meta.env.VITE_GEN_AI_MODEL_ID as string | undefined) ||
+  "gemini-1.5-flash-latest";
 
 export async function askReportAI(params: AskReportAIParams): Promise<string> {
   const { question, reportContext, history, attachments = [] } = params;
