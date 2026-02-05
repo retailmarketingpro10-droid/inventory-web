@@ -129,6 +129,41 @@ All colors MUST be HSL.
   }
 }
 
+/* Global scrollbar for html and body - Applied directly (not via @apply) */
+html, body {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(0 0% 45% / 0.7) hsl(0 0% 85% / 0.3);
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track {
+  background: hsl(0 0% 85% / 0.3);
+  border-radius: 6px;
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+  background: hsl(0 0% 45% / 0.7);
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover {
+  background: hsl(0 0% 40% / 0.85);
+}
+
+html::-webkit-scrollbar-thumb:active,
+body::-webkit-scrollbar-thumb:active {
+  background: hsl(0 0% 35% / 0.95);
+}
+
 /* Custom Scrollbar Styles - Beautiful, Clean, and Modern */
 .custom-scrollbar {
   scrollbar-width: thin;

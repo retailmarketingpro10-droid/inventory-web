@@ -1,33 +1,82 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Paperclip, Send, Loader2, Image as ImageIcon, FileText, ShieldCheck } from "lucide-react";
+import { Paperclip, Send, Loader2, Image as ImageIcon, FileText, ShieldCheck, Copy } from "lucide-react";
 import { askReportAI, AIChatMessage, AIReportAttachment, checkGeminiKey, KeyStatusResult } from "@/services/aiReportService";
 import { useToast } from "@/hooks/use-toast";
 
 interface ReportChatProps {
   reportContext: any;
+  storageKey?: string;
 }
 
 const MAX_TEXT_FILE_PREVIEW_CHARS = 20000;
 
-export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
-  const [messages, setMessages] = useState<AIChatMessage[]>([
-    {
-      role: "assistant",
-      content:
-        "I can explain this report, its fields, and how the main figures are calculated. Ask me anything about the numbers, trends, or definitions.",
-      timestamp: new Date().toISOString(),
-    },
-  ]);
+export const ReportChat: React.FC<ReportChatProps> = ({ reportContext, storageKey }) => {
+  const initialMessages = useMemo<AIChatMessage[]>(
+    () => [
+      {
+        role: "assistant",
+        content:
+          "I can explain this report, its fields, and how the main figures are calculated. Ask me anything about the numbers, trends, or definitions.",
+        timestamp: new Date().toISOString(),
+      },
+    ],
+    []
+  );
+
+  const [messages, setMessages] = useState<AIChatMessage[]>(() => {
+    if (!storageKey) return initialMessages;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return initialMessages;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed as AIChatMessage[];
+      }
+      return initialMessages;
+    } catch {
+      return initialMessages;
+    }
+  });
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [keyStatus, setKeyStatus] = useState<"idle" | "checking" | "valid" | "invalid">("idle");
   const [keyStatusMessage, setKeyStatusMessage] = useState<string>("");
   const { toast } = useToast();
+
+  // Reload messages if storageKey changes (e.g. company/report changes).
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) {
+        setMessages(initialMessages);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setMessages(parsed as AIChatMessage[]);
+      } else {
+        setMessages(initialMessages);
+      }
+    } catch {
+      setMessages(initialMessages);
+    }
+  }, [storageKey, initialMessages]);
+
+  // Persist messages so collapsing/expanding keeps history.
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(messages));
+    } catch {
+      // ignore storage errors
+    }
+  }, [storageKey, messages]);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const newFiles = Array.from(event.target.files || []);
@@ -266,25 +315,52 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
       </CardHeader>
       <CardContent className="space-y-3 pt-1">
         <div className="border border-border/70 rounded-2xl h-80 md:h-[26rem] bg-background/90">
-          <ScrollArea className="h-full p-4 space-y-2.5">
-            {messages.map((message, index) => (
-              <div
-                key={index}
-                className={`flex ${
-                  message.role === "user" ? "justify-end" : "justify-start"
-                }`}
-              >
+          <ScrollArea className="h-full p-4">
+            <div className="flex flex-col gap-3">
+              {messages.map((message, index) => (
                 <div
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-snug whitespace-pre-wrap ${
-                    message.role === "user"
-                      ? "bg-primary text-primary-foreground rounded-br-none"
-                      : "bg-muted text-muted-foreground rounded-bl-none border border-border/60"
+                  key={index}
+                  className={`flex ${
+                    message.role === "user" ? "justify-end" : "justify-start"
                   }`}
                 >
-                  {message.content}
+                  <div
+                    className={`relative max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-snug whitespace-pre-wrap ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground rounded-br-none"
+                        : "bg-muted text-muted-foreground rounded-bl-none border border-border/60"
+                    }`}
+                  >
+                    {message.role === "assistant" && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(message.content);
+                            toast({
+                              title: "Copied",
+                              description: "AI response copied to clipboard.",
+                            });
+                          } catch {
+                            toast({
+                              title: "Copy failed",
+                              description: "Could not copy to clipboard.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                        className="absolute top-2 right-2 text-muted-foreground hover:text-foreground"
+                        aria-label="Copy AI response"
+                        title="Copy"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {message.content}
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </ScrollArea>
         </div>
 
@@ -342,7 +418,7 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
                 ) as HTMLInputElement | null;
                 inputEl?.click();
               }}
-              className="flex h-6 w-6 items-center justify-center rounded-full border border-border/70 bg-background/80 text-muted-foreground hover:text-foreground hover:bg-background"
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-border/70 bg-background/80 text-muted-foreground hover:text-foreground hover:bg-background"
               aria-label="Attach image or file"
             >
               <Paperclip className="h-3 w-3" />
@@ -366,7 +442,7 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder="Ask AI..."
-              className="flex-1 h-6 rounded-full bg-background/95 border border-border/60 px-3 text-[10px] leading-none whitespace-nowrap overflow-x-auto"
+              className="flex-1 h-7 rounded-full bg-background/95 border border-border/60 px-3 text-[11px] leading-none whitespace-nowrap overflow-x-auto focus-visible:outline-none focus-visible:ring-0 focus:outline-none focus:ring-0 focus:border-border/60"
             />
 
             {/* Send icon button on the right, outside the input */}
@@ -374,7 +450,7 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext }) => {
               type="button"
               onClick={handleSend}
               disabled={isLoading}
-              className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               aria-label="Send message"
             >
               {isLoading ? (

@@ -39,7 +39,12 @@ export const useAuth = () => {
       // Clear all Supabase-related keys from localStorage
       const keys = Object.keys(localStorage);
       keys.forEach(key => {
-        if (key.startsWith('sb-') || key.includes('supabase') || key.includes('auth')) {
+        if (
+          key.startsWith('sb-') ||
+          key.includes('supabase') ||
+          key.includes('auth') ||
+          key.startsWith('reportChat_')
+        ) {
           localStorage.removeItem(key);
         }
       });

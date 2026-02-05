@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { MessageCircle } from "lucide-react";
 import { ReportChat } from "@/components/reports/ReportChat";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Tooltip,
   TooltipContent,
@@ -21,14 +22,17 @@ export const ReportChatWidget: React.FC<ReportChatWidgetProps> = ({
   reportContext,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const { user } = useAuth();
 
   const toggle = () => setIsOpen((prev) => !prev);
+
+  const storageKey = `reportChat_${user?.id || "anon"}_${reportContext?.company?.name || "noCompany"}_${reportContext?.reportId || "noReport"}`;
 
   return (
     <div className="fixed bottom-8 right-6 z-50 flex flex-col items-end gap-3 pointer-events-none">
       {isOpen && (
         <div className="w-[360px] md:w-[420px] max-h-[80vh] shadow-2xl pointer-events-auto">
-          <ReportChat reportContext={reportContext} />
+          <ReportChat reportContext={reportContext} storageKey={storageKey} />
         </div>
       )}
 
