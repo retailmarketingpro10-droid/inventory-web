@@ -186,7 +186,7 @@ export const ReportsManager: React.FC = () => {
 
       switch (selectedReport) {
         case 'profit-loss': {
-          // Fetch all sales invoices (for sales account)
+          // Fetch all sales invoices (for sales account) within the reporting period
           const { data: allSalesInvoices, error: salesError } = await supabase
             .from('invoices')
             .select('id, subtotal, tax_amount, total_amount, invoice_date, discount_amount')
@@ -199,19 +199,19 @@ export const ReportsManager: React.FC = () => {
             logger.error('Error fetching sales invoices:', salesError);
           }
 
-          // Fetch sale return invoices
+          // Fetch sale return invoices in the reporting period
           const { data: saleReturns } = await supabase
             .from('invoices')
-            .select('subtotal, tax_amount, total_amount, invoice_date')
+            .select('id, subtotal, tax_amount, total_amount, invoice_date')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'sale_return')
             .gte('invoice_date', dateFrom)
             .lte('invoice_date', dateTo);
 
-          // Fetch purchase invoices
+          // Fetch purchase invoices in the reporting period
           const { data: purchaseInvoices, error: purchaseError } = await supabase
             .from('invoices')
-            .select('subtotal, tax_amount, total_amount, invoice_date, discount_amount')
+            .select('id, subtotal, tax_amount, total_amount, invoice_date, discount_amount')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase')
             .gte('invoice_date', dateFrom)
@@ -221,16 +221,45 @@ export const ReportsManager: React.FC = () => {
             logger.error('Error fetching purchase invoices:', purchaseError);
           }
 
-          // Fetch purchase return invoices
+          // Fetch purchase return invoices in the reporting period
           const { data: purchaseReturns } = await supabase
             .from('invoices')
-            .select('subtotal, tax_amount, total_amount, invoice_date')
+            .select('id, subtotal, tax_amount, total_amount, invoice_date')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase_return')
             .gte('invoice_date', dateFrom)
             .lte('invoice_date', dateTo);
 
-          // Fetch labour invoices (as expenses)
+          // Fetch invoices BEFORE the reporting period for opening stock calculation
+          const { data: salesBeforePeriod } = await supabase
+            .from('invoices')
+            .select('id')
+            .eq('company_id', selectedCompany.company_name)
+            .eq('invoice_type', 'sales')
+            .lt('invoice_date', dateFrom);
+
+          const { data: saleReturnsBeforePeriod } = await supabase
+            .from('invoices')
+            .select('id')
+            .eq('company_id', selectedCompany.company_name)
+            .eq('invoice_type', 'sale_return')
+            .lt('invoice_date', dateFrom);
+
+          const { data: purchaseInvoicesBeforePeriod } = await supabase
+            .from('invoices')
+            .select('id')
+            .eq('company_id', selectedCompany.company_name)
+            .eq('invoice_type', 'purchase')
+            .lt('invoice_date', dateFrom);
+
+          const { data: purchaseReturnsBeforePeriod } = await supabase
+            .from('invoices')
+            .select('id')
+            .eq('company_id', selectedCompany.company_name)
+            .eq('invoice_type', 'purchase_return')
+            .lt('invoice_date', dateFrom);
+
+          // Fetch labour invoices (potential direct inventory expenses)
           const { data: labourInvoices } = await supabase
             .from('invoices')
             .select('subtotal, tax_amount, total_amount, invoice_date, entity_type')
@@ -239,7 +268,7 @@ export const ReportsManager: React.FC = () => {
             .gte('invoice_date', dateFrom)
             .lte('invoice_date', dateTo);
 
-          // Fetch transport invoices (as expenses)
+          // Fetch transport invoices (potential direct inventory expenses)
           const { data: transportInvoices } = await supabase
             .from('invoices')
             .select('subtotal, tax_amount, total_amount, invoice_date, entity_type')
@@ -251,7 +280,7 @@ export const ReportsManager: React.FC = () => {
           // Fetch sales invoice IDs first
           const salesInvoiceIds = (allSalesInvoices || []).map(inv => inv.id);
           
-          // Fetch sales invoice items to calculate quantity sold for closing stock
+          // Fetch sales invoice items to calculate quantity sold for closing stock (period only)
           let salesInvoiceItems: any[] = [];
           if (salesInvoiceIds.length > 0) {
             const { data: itemsData } = await supabase
@@ -261,7 +290,7 @@ export const ReportsManager: React.FC = () => {
             salesInvoiceItems = itemsData || [];
           }
 
-          // Fetch purchase invoice items for closing stock calculation (debits)
+          // Fetch purchase invoice items for closing stock calculation (debits, period only)
           let purchaseInvoiceItems: any[] = [];
           const purchaseInvoiceIds = (purchaseInvoices || []).map(inv => inv.id);
           if (purchaseInvoiceIds.length > 0) {
@@ -272,7 +301,7 @@ export const ReportsManager: React.FC = () => {
             purchaseInvoiceItems = purchaseItemsData || [];
           }
 
-          // Fetch sale return items (credits - increase stock)
+          // Fetch sale return items (credits - increase stock, period only)
           let saleReturnItems: any[] = [];
           const saleReturnIds = (saleReturns || []).map(inv => inv.id);
           if (saleReturnIds.length > 0) {
@@ -283,7 +312,7 @@ export const ReportsManager: React.FC = () => {
             saleReturnItems = returnItemsData || [];
           }
 
-          // Fetch purchase return items (debits - decrease stock)
+          // Fetch purchase return items (debits - decrease stock, period only)
           let purchaseReturnItems: any[] = [];
           const purchaseReturnIds = (purchaseReturns || []).map(inv => inv.id);
           if (purchaseReturnIds.length > 0) {
@@ -294,6 +323,47 @@ export const ReportsManager: React.FC = () => {
             purchaseReturnItems = purchaseReturnItemsData || [];
           }
 
+          // Fetch items BEFORE the reporting period for opening stock calculation
+          let salesInvoiceItemsBeforePeriod: any[] = [];
+          const salesBeforeIds = (salesBeforePeriod || []).map(inv => inv.id);
+          if (salesBeforeIds.length > 0) {
+            const { data: itemsBeforeData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', salesBeforeIds);
+            salesInvoiceItemsBeforePeriod = itemsBeforeData || [];
+          }
+
+          let saleReturnItemsBeforePeriod: any[] = [];
+          const saleReturnsBeforeIds = (saleReturnsBeforePeriod || []).map(inv => inv.id);
+          if (saleReturnsBeforeIds.length > 0) {
+            const { data: returnItemsBeforeData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', saleReturnsBeforeIds);
+            saleReturnItemsBeforePeriod = returnItemsBeforeData || [];
+          }
+
+          let purchaseInvoiceItemsBeforePeriod: any[] = [];
+          const purchaseBeforeIds = (purchaseInvoicesBeforePeriod || []).map(inv => inv.id);
+          if (purchaseBeforeIds.length > 0) {
+            const { data: purchaseItemsBeforeData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', purchaseBeforeIds);
+            purchaseInvoiceItemsBeforePeriod = purchaseItemsBeforeData || [];
+          }
+
+          let purchaseReturnItemsBeforePeriod: any[] = [];
+          const purchaseReturnsBeforeIds = (purchaseReturnsBeforePeriod || []).map(inv => inv.id);
+          if (purchaseReturnsBeforeIds.length > 0) {
+            const { data: purchaseReturnItemsBeforeData } = await supabase
+              .from('invoice_items')
+              .select('quantity, unit_price, product_id, invoice_id')
+              .in('invoice_id', purchaseReturnsBeforeIds);
+            purchaseReturnItemsBeforePeriod = purchaseReturnItemsBeforeData || [];
+          }
+
           // Fetch all products
           const { data: products, error: productsError } = await supabase
             .from('products')
@@ -301,145 +371,170 @@ export const ReportsManager: React.FC = () => {
             .eq('company_id', selectedCompany.company_name);
 
           if (productsError) {
-            logger.error('Error fetching products for opening stock:', productsError);
+            logger.error('Error fetching products for opening/closing stock:', productsError);
           }
 
-          // Calculate Opening Stock at the beginning of the period (dateFrom)
-          // Opening Stock = Current Stock - Purchases + Sales - Sales Returns + Purchase Returns
-          // This reverses all transactions in the period to get the opening balance
-          // Note: Opening stock remains constant for the period and doesn't change with sales entries
-          // Sales entries only affect closing stock, not opening stock (as per Tally behavior)
-          
+          // Calculate Opening and Closing Stock using Trading Account style ledger logic.
+          //
+          // For each product:
+          //   openingQty = purchases_before - purchase_returns_before - sales_before + sales_returns_before
+          //   closingQty = openingQty
+          //                + purchases_in_period - purchase_returns_in_period
+          //                - sales_in_period + sales_returns_in_period
+          //
+          // Both opening and closing are valued at purchase_price (base cost, excluding GST).
           let openingStockValue = 0;
-          (products || []).forEach(product => {
-            const currentStock = product.current_stock || 0;
+          let closingStockValue = 0;
+
+          (products || []).forEach((product) => {
             const purchasePrice = product.purchase_price || 0;
-            
-            // Find net quantity changes in the period for this product
+
+            // --- Quantities BEFORE the period (for opening stock) ---
+            let qtyPurchasedBefore = 0;
+            (purchaseInvoiceItemsBeforePeriod || []).forEach((item) => {
+              if (item.product_id === product.id) {
+                qtyPurchasedBefore += item.quantity || 0;
+              }
+            });
+
+            let qtyPurchaseReturnBefore = 0;
+            (purchaseReturnItemsBeforePeriod || []).forEach((item) => {
+              if (item.product_id === product.id) {
+                qtyPurchaseReturnBefore += item.quantity || 0;
+              }
+            });
+
+            let qtySoldBefore = 0;
+            (salesInvoiceItemsBeforePeriod || []).forEach((item) => {
+              if (item.product_id === product.id) {
+                qtySoldBefore += item.quantity || 0;
+              }
+            });
+
+            let qtySalesReturnBefore = 0;
+            (saleReturnItemsBeforePeriod || []).forEach((item) => {
+              if (item.product_id === product.id) {
+                qtySalesReturnBefore += item.quantity || 0;
+              }
+            });
+
+            const openingStockQty = Math.max(
+              0,
+              qtyPurchasedBefore
+                - qtyPurchaseReturnBefore
+                - qtySoldBefore
+                + qtySalesReturnBefore
+            );
+
+            openingStockValue += openingStockQty * purchasePrice;
+
+            // --- Quantities INSIDE the period (from dateFrom to dateTo) ---
             let quantityPurchasedInPeriod = 0;
-            (purchaseInvoiceItems || []).forEach(item => {
+            (purchaseInvoiceItems || []).forEach((item) => {
               if (item.product_id === product.id) {
                 quantityPurchasedInPeriod += item.quantity || 0;
               }
             });
-            
+
             let quantitySoldInPeriod = 0;
-            (salesInvoiceItems || []).forEach(item => {
+            (salesInvoiceItems || []).forEach((item) => {
               if (item.product_id === product.id) {
                 quantitySoldInPeriod += item.quantity || 0;
               }
             });
-            
+
             let salesReturnQtyInPeriod = 0;
-            (saleReturnItems || []).forEach(item => {
+            (saleReturnItems || []).forEach((item) => {
               if (item.product_id === product.id) {
                 salesReturnQtyInPeriod += item.quantity || 0;
               }
             });
-            
+
             let purchaseReturnQtyInPeriod = 0;
-            (purchaseReturnItems || []).forEach(item => {
+            (purchaseReturnItems || []).forEach((item) => {
               if (item.product_id === product.id) {
                 purchaseReturnQtyInPeriod += item.quantity || 0;
               }
             });
-            
-            // Calculate opening stock: Current Stock - Purchases + Sales - Sales Returns + Purchase Returns
-            // This reverses period transactions to get opening balance at start of period
-            // Opening stock remains constant; only closing stock changes with transactions
-            const openingStockQty = Math.max(0, currentStock - quantityPurchasedInPeriod + quantitySoldInPeriod - salesReturnQtyInPeriod + purchaseReturnQtyInPeriod);
-            
-            // Calculate opening stock value at purchase price (cost basis)
-            openingStockValue += openingStockQty * purchasePrice;
+
+            const closingStockQty = Math.max(
+              0,
+              openingStockQty
+                + quantityPurchasedInPeriod
+                - purchaseReturnQtyInPeriod
+                - quantitySoldInPeriod
+                + salesReturnQtyInPeriod
+            );
+
+            closingStockValue += closingStockQty * purchasePrice;
           });
 
           const openingStockCost = openingStockValue;
+          const closingStock = closingStockValue;
 
-          // Calculate purchases and returns
-          const totalPurchases = purchaseInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-          const totalPurchaseReturns = purchaseReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+          // Calculate purchases and returns (base values only, excluding GST)
+          const totalPurchases =
+            purchaseInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+          const totalPurchaseReturns =
+            purchaseReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
           const netPurchases = totalPurchases - totalPurchaseReturns;
           
-          const purchaseTax = purchaseInvoices?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
-          const purchaseReturnTax = purchaseReturns?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
+          const purchaseTax =
+            purchaseInvoices?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
+          const purchaseReturnTax =
+            purchaseReturns?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
           const netPurchaseTax = purchaseTax - purchaseReturnTax;
           
-          // Total inventory cost including tax = Opening Stock + Net Purchase Tax
+          // Total inventory-related tax for reference (not used directly in COGS)
           const totalInventoryCostWithTax = openingStockCost + netPurchaseTax;
 
-          // Calculate sales and returns
-          const totalSales = allSalesInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-          const totalSaleReturns = saleReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+          // Calculate sales and returns (revenue side)
+          const totalSales =
+            allSalesInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+          const totalSaleReturns =
+            saleReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
           const netSales = totalSales - totalSaleReturns;
           
-          const salesTax = allSalesInvoices?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
-          const saleReturnTax = saleReturns?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
+          const salesTax =
+            allSalesInvoices?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
+          const saleReturnTax =
+            saleReturns?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
           const netSalesTax = salesTax - saleReturnTax;
           
-          // Calculate total inventory selling price with tax
+          // Calculate total inventory selling price with tax (for reference)
           const totalInventorySellingWithTax = (products || []).reduce((sum, product) => {
             const stock = product.current_stock || 0;
             const sellingPrice = product.selling_price || 0;
             const gstRate = product.gst_rate || 18; // Get GST rate from product
-            const taxAmount = (stock * sellingPrice) * (gstRate / 100);
-            return sum + (stock * sellingPrice) + taxAmount;
+            const taxAmount = stock * sellingPrice * (gstRate / 100);
+            return sum + stock * sellingPrice + taxAmount;
           }, 0);
 
-          // Calculate closing stock using ledger formula: Opening - Debit + Credit = Closing
-          // For inventory: Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal) - Purchase Returns (debit reversal) = Closing
-          // Note: Opening stock remains constant; sales entries reduce closing stock, not opening stock (as per Tally behavior)
-          let closingStockValue = 0;
-          (products || []).forEach(product => {
-            const purchasePrice = product.purchase_price || 0;
-            const currentStock = product.current_stock || 0;
-            
-            // Find transactions in the period
-            let quantityPurchasedInPeriod = 0;
-            (purchaseInvoiceItems || []).forEach(item => {
-              if (item.product_id === product.id) {
-                quantityPurchasedInPeriod += item.quantity || 0;
-              }
-            });
-            
-            let quantitySoldInPeriod = 0;
-            (salesInvoiceItems || []).forEach(item => {
-              if (item.product_id === product.id) {
-                quantitySoldInPeriod += item.quantity || 0;
-              }
-            });
-            
-            let salesReturnQtyInPeriod = 0;
-            (saleReturnItems || []).forEach(item => {
-              if (item.product_id === product.id) {
-                salesReturnQtyInPeriod += item.quantity || 0;
-              }
-            });
-            
-            let purchaseReturnQtyInPeriod = 0;
-            (purchaseReturnItems || []).forEach(item => {
-              if (item.product_id === product.id) {
-                purchaseReturnQtyInPeriod += item.quantity || 0;
-              }
-            });
-            
-            // Opening stock at beginning of period (constant, doesn't change with sales)
-            const openingStockQty = Math.max(0, currentStock - quantityPurchasedInPeriod + quantitySoldInPeriod - salesReturnQtyInPeriod + purchaseReturnQtyInPeriod);
-            
-            // Calculate closing stock quantity using ledger formula
-            // Closing = Opening + Purchases (debit) - Sales (credit) + Sales Returns (credit reversal) - Purchase Returns (debit reversal)
-            // Opening stock remains constant; only closing stock changes with transactions
-            const closingStockQty = Math.max(0, openingStockQty + quantityPurchasedInPeriod - quantitySoldInPeriod + salesReturnQtyInPeriod - purchaseReturnQtyInPeriod);
-            
-            // Calculate closing stock value at purchase price (cost basis)
-            closingStockValue += closingStockQty * purchasePrice;
-          });
+          // Calculate direct expenses to be included in COGS (base amounts only, excluding GST).
+          // Examples: freight inward, loading/unloading, labour tied directly to inventory.
+          const labourDirectBase =
+            (labourInvoices || []).reduce(
+              (sum, inv) => sum + (inv.subtotal || 0),
+              0
+            ) || 0;
+          const transportDirectBase =
+            (transportInvoices || []).reduce(
+              (sum, inv) => sum + (inv.subtotal || 0),
+              0
+            ) || 0;
+          const directExpenses = labourDirectBase + transportDirectBase;
 
-          // Use closingStockValue for the report
-          const closingStock = closingStockValue;
-
-          // Calculate indirect expenses (labour + transport invoices with tax)
-          const labourExpenses = (labourInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-          const transportExpenses = (transportInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
+          // Still keep the full (with-tax) values for disclosure in the report if needed.
+          const labourExpenses =
+            (labourInvoices || []).reduce(
+              (sum, inv) => sum + (inv.total_amount || 0),
+              0
+            ) || 0;
+          const transportExpenses =
+            (transportInvoices || []).reduce(
+              (sum, inv) => sum + (inv.total_amount || 0),
+              0
+            ) || 0;
           
           // Calculate sales discounts (indirect expenses)
           // Include both discount_amount and discount_percentage
@@ -485,7 +580,9 @@ export const ReportsManager: React.FC = () => {
             purchaseDiscounts += invoiceDiscount;
           });
           
-          const indirectExpenses = labourExpenses + transportExpenses + salesDiscounts;
+          // Indirect expenses are things that do NOT form part of inventory cost
+          // (here we treat only sales discounts and ledger-mapped expenses as indirect).
+          const indirectExpenses = salesDiscounts;
 
           // Fetch ledger entries for indirect income (income and expense ledgers)
           const { data: { user } } = await supabase.auth.getUser();
@@ -599,11 +696,12 @@ export const ReportsManager: React.FC = () => {
             }
           }, 0);
           
-          // Total indirect expenses = labour + transport + ledger expenses
+          // Total indirect expenses = sales discounts + ledger expenses
           const totalIndirectExpenses = indirectExpenses + indirectExpensesFromLedgers;
 
-          // Calculate cost of goods sold properly
-          const effectiveCOGS = openingStockCost + netPurchases - closingStock;
+          // Cost of Goods Sold (Trading Account):
+          // COGS = Opening Stock + Net Purchases + Direct Expenses − Closing Stock
+          const effectiveCOGS = openingStockCost + netPurchases + directExpenses - closingStock;
           
           // Calculate gross profit with net sales
           const grossProfit = netSales - effectiveCOGS;
@@ -624,12 +722,12 @@ export const ReportsManager: React.FC = () => {
             { subcategory: 'Purchase Account', amount: totalPurchases, category: 'Cost of Goods Sold' },
             { subcategory: 'Less: Purchase Returns', amount: -totalPurchaseReturns, category: 'Cost of Goods Sold' },
             { subcategory: 'Net Purchases', amount: netPurchases, category: 'Cost of Goods Sold' },
-            { subcategory: 'Total Inventory Cost (with Net Tax)', amount: totalInventoryCostWithTax, category: 'Cost of Goods Sold' },
+            { subcategory: 'Direct Expenses - Labour (Base, excl. GST)', amount: labourDirectBase, category: 'Cost of Goods Sold' },
+            { subcategory: 'Direct Expenses - Transport (Base, excl. GST)', amount: transportDirectBase, category: 'Cost of Goods Sold' },
+            { subcategory: 'Total Direct Expenses (Base)', amount: directExpenses, category: 'Cost of Goods Sold' },
             { subcategory: 'Less: Closing Stock', amount: -closingStock, category: 'Cost of Goods Sold' },
             { subcategory: 'Cost of Goods Sold', amount: effectiveCOGS, category: 'Cost of Goods Sold' },
             { subcategory: '', amount: grossProfit, category: 'Gross Profit' },
-            { subcategory: 'Labour Invoices (with Tax)', amount: labourExpenses, category: 'Indirect Expenses' },
-            { subcategory: 'Transport Invoices (with Tax)', amount: transportExpenses, category: 'Indirect Expenses' },
             { subcategory: 'Sales Discounts', amount: salesDiscounts, category: 'Indirect Expenses' },
             { subcategory: 'Indirect Expenses (Ledger)', amount: indirectExpensesFromLedgers, category: 'Indirect Expenses' },
             { subcategory: 'Total Indirect Expenses', amount: totalIndirectExpenses, category: 'Indirect Expenses' },
@@ -651,6 +749,7 @@ export const ReportsManager: React.FC = () => {
             openingStock: openingStockCost,
             closingStock: closingStock,
             cogs: effectiveCOGS,
+            directExpenses: directExpenses,
             indirectExpenses: totalIndirectExpenses,
             indirectIncome: indirectIncome,
             salesDiscounts: salesDiscounts
@@ -2736,10 +2835,21 @@ export const ReportsManager: React.FC = () => {
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                         <div className="space-y-1">
                           <p className="font-semibold text-sm mb-2">Cost of Goods Sold (COGS):</p>
-                          <p className="text-muted-foreground">Opening Stock: {formatIndianCurrency((summary as any).openingStock || 0)}</p>
-                          <p className="text-muted-foreground">+ Net Purchases: {formatIndianCurrency(summary.totalPurchases || 0)}</p>
-                          <p className="text-muted-foreground">- Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}</p>
-                          <p className="font-semibold mt-2 text-green-600">= COGS: {formatIndianCurrency((summary as any).cogs || 0)}</p>
+                          <p className="text-muted-foreground">
+                            Opening Stock: {formatIndianCurrency((summary as any).openingStock || 0)}
+                          </p>
+                          <p className="text-muted-foreground">
+                            + Net Purchases: {formatIndianCurrency(summary.totalPurchases || 0)}
+                          </p>
+                          <p className="text-muted-foreground">
+                            + Direct Expenses: {formatIndianCurrency((summary as any).directExpenses || 0)}
+                          </p>
+                          <p className="text-muted-foreground">
+                            − Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}
+                          </p>
+                          <p className="font-semibold mt-2 text-green-600">
+                            = COGS: {formatIndianCurrency((summary as any).cogs || 0)}
+                          </p>
                         </div>
                         <div className="space-y-1">
                           <p className="font-semibold text-sm mb-2">Gross Profit:</p>
@@ -2756,10 +2866,19 @@ export const ReportsManager: React.FC = () => {
                           <p className="font-semibold mt-2 text-green-600">= Net Profit: {formatIndianCurrency(summary.netProfit || 0)}</p>
                         </div>
                         <div className="space-y-1">
-                          <p className="font-semibold text-sm mb-2">Closing Stock Formula:</p>
-                          <p className="text-muted-foreground">Opening - Debit + Credit = Closing</p>
-                          <p className="text-muted-foreground text-xs mt-1">(Opening + Purchases - Sales + Sales Returns)</p>
-                          <p className="text-muted-foreground text-xs mt-2">Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}</p>
+                          <p className="font-semibold text-sm mb-2">Closing Stock Formula (per product):</p>
+                          <p className="text-muted-foreground text-xs">
+                            Opening Qty = Purchases(before) − Purchase Returns(before) − Sales(before) + Sales Returns(before)
+                          </p>
+                          <p className="text-muted-foreground text-xs mt-1">
+                            Closing Qty = Opening Qty + Purchases(period) − Purchase Returns(period) − Sales(period) + Sales Returns(period)
+                          </p>
+                          <p className="text-muted-foreground text-xs mt-2">
+                            Closing Stock = Σ(Closing Qty × Unit Cost)
+                          </p>
+                          <p className="text-muted-foreground text-xs mt-2">
+                            Closing Stock Value: {formatIndianCurrency((summary as any).closingStock || 0)}
+                          </p>
                         </div>
                       </div>
                     </div>
