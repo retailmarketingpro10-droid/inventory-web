@@ -1038,10 +1038,13 @@ export const ReportsManager: React.FC = () => {
           newSummary = {
             totalSales: 0,
             totalPurchases: totalPO + totalPurchases,
-            grossProfit: totalTax,
+            grossProfit: netTax,
             netProfit: netAmount,
             purchaseReturns: totalPurchaseReturns,
-            netPurchase: netPurchase
+            netPurchase: netPurchase,
+            totalTax,
+            totalReturnTax,
+            netPurchaseTax: netTax
           };
           
           console.log(`Purchase report: Purchases=${totalPO + totalPurchases}, Returns=${totalPurchaseReturns}, Net=${netPurchase}`);
@@ -1390,11 +1393,11 @@ export const ReportsManager: React.FC = () => {
             g.transaction_type === 'sale_return' || g.transaction_type === 'purchase_return'
           );
           
-          // Create detailed GST breakdown rows
+          // Create detailed GST breakdown rows (include return/refund entries with negative amounts)
           const gstBreakdownRows: any[] = [];
           regularGSTData.forEach((g: any) => {
-            // Add CGST row if CGST > 0
-            if (g.cgst && g.cgst > 0) {
+            // Add CGST row if CGST is non-zero (positive = sale/purchase, negative = return/refund deduction)
+            if (g.cgst != null && g.cgst !== 0) {
               gstBreakdownRows.push({
                 subcategory: g.invoice_number || '',
                 amount: g.cgst || 0,
@@ -1407,8 +1410,8 @@ export const ReportsManager: React.FC = () => {
                 gst_rate: g.gst_rate || 0
               });
             }
-            // Add SGST row if SGST > 0
-            if (g.sgst && g.sgst > 0) {
+            // Add SGST row if SGST is non-zero
+            if (g.sgst != null && g.sgst !== 0) {
               gstBreakdownRows.push({
                 subcategory: g.invoice_number || '',
                 amount: g.sgst || 0,
@@ -1421,8 +1424,8 @@ export const ReportsManager: React.FC = () => {
                 gst_rate: g.gst_rate || 0
               });
             }
-            // Add IGST row if IGST > 0
-            if (g.igst && g.igst > 0) {
+            // Add IGST row if IGST is non-zero
+            if (g.igst != null && g.igst !== 0) {
               gstBreakdownRows.push({
                 subcategory: g.invoice_number || '',
                 amount: g.igst || 0,
