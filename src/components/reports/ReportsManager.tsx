@@ -1362,18 +1362,17 @@ export const ReportsManager: React.FC = () => {
               console.log(`Found ${gstData.length} GST entries for company ${selectedCompany.company_name}`);
             }
 
-          // Separate by transaction type (exclude returns/refunds - treat as void)
-          const salesTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'sale');
-          const purchaseTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'purchase');
-          // Note: saleReturns and purchaseReturns are excluded from calculations (treated as void)
+          // Include sale + sale_return for output tax (sale_return has negative amounts, so net = Sales GST - Return GST)
+          const salesTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'sale' || g.transaction_type === 'sale_return');
+          const purchaseTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'purchase' || g.transaction_type === 'purchase_return');
 
-          // Calculate Output Tax (Sales - GST collected from customers)
+          // Output Tax = Sales GST − Sale Return GST (sale_return entries have negative cgst/sgst/igst)
           const outputCGST = salesTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
           const outputSGST = salesTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
           const outputIGST = salesTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
           const totalOutputTax = outputCGST + outputSGST + outputIGST;
 
-          // Calculate Input Tax (Purchases - GST paid to suppliers)
+          // Input Tax = Purchase GST − Purchase Return GST (purchase_return entries have negative amounts)
           const inputCGST = purchaseTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
           const inputSGST = purchaseTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
           const inputIGST = purchaseTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
@@ -1385,10 +1384,10 @@ export const ReportsManager: React.FC = () => {
           const netIGST = outputIGST - inputIGST;
           const netGSTLiability = totalOutputTax - totalInputTax;
 
-          // Map only regular GST entries for detailed view (exclude returns as void)
-          // Create separate rows for CGST, SGST, and IGST breakdown
+          // Include sale, purchase, sale_return, and purchase_return for detailed view (returns show negative amounts)
           const regularGSTData = (gstData || []).filter((g: any) => 
-            g.transaction_type === 'sale' || g.transaction_type === 'purchase'
+            g.transaction_type === 'sale' || g.transaction_type === 'purchase' ||
+            g.transaction_type === 'sale_return' || g.transaction_type === 'purchase_return'
           );
           
           // Create detailed GST breakdown rows
@@ -1933,8 +1932,12 @@ export const ReportsManager: React.FC = () => {
 
             // Map products to report rows
             sampleData = (products || []).map((product: any) => {
-              const stockValue = (product.current_stock || 0) * (product.purchase_price || 0);
+              const purchasePrice = product.purchase_price || 0;
+              const sellingPrice = product.selling_price || 0;
+              const stockValue = (product.current_stock || 0) * purchasePrice;
               const isLowStock = product.min_stock_level && (product.current_stock || 0) < product.min_stock_level;
+              const profit = sellingPrice - purchasePrice;
+              const profitMargin = purchasePrice > 0 ? ((profit / purchasePrice) * 100) : 0;
               
               return {
                 subcategory: product.name || 'Unknown',
@@ -1944,12 +1947,14 @@ export const ReportsManager: React.FC = () => {
                 description: product.description || '',
                 hsn_code: product.hsn_code || '',
                 current_stock: product.current_stock || 0,
-                purchase_price: product.purchase_price || 0,
-                selling_price: product.selling_price || 0,
+                purchase_price: purchasePrice,
+                selling_price: sellingPrice,
                 gst_rate: product.gst_rate || 0,
                 min_stock_level: product.min_stock_level || 0,
                 stock_value: stockValue,
-                is_low_stock: isLowStock
+                is_low_stock: isLowStock,
+                profit,
+                profit_margin: profitMargin
               };
             });
 
@@ -2103,14 +2108,16 @@ export const ReportsManager: React.FC = () => {
 
           case 'inventory-report':
             columns = [
-              { key: 'product_name', label: 'Product Name', width: '25%', align: 'left' },
-              { key: 'hsn_code', label: 'HSN Code', width: '12%', align: 'left' },
-              { key: 'current_stock', label: 'Stock', width: '10%', align: 'right' },
-              { key: 'purchase_price', label: 'Purchase Price', width: '12%', align: 'right', format: 'currency' },
-              { key: 'selling_price', label: 'Selling Price', width: '12%', align: 'right', format: 'currency' },
-              { key: 'gst_rate', label: 'GST %', width: '8%', align: 'right' },
-              { key: 'stock_value', label: 'Stock Value', width: '15%', align: 'right', format: 'currency' },
-              { key: 'status', label: 'Status', width: '6%', align: 'left' }
+              { key: 'product_name', label: 'Product Name', width: '20%', align: 'left' },
+              { key: 'hsn_code', label: 'HSN Code', width: '10%', align: 'left' },
+              { key: 'current_stock', label: 'Stock', width: '8%', align: 'right' },
+              { key: 'purchase_price', label: 'Purchase Price', width: '10%', align: 'right', format: 'currency' },
+              { key: 'selling_price', label: 'Selling Price', width: '10%', align: 'right', format: 'currency' },
+              { key: 'profit', label: 'Profit', width: '10%', align: 'right', format: 'currency' },
+              { key: 'profit_margin', label: 'Profit Margin %', width: '10%', align: 'right' },
+              { key: 'gst_rate', label: 'GST %', width: '6%', align: 'right' },
+              { key: 'stock_value', label: 'Stock Value', width: '12%', align: 'right', format: 'currency' },
+              { key: 'status', label: 'Status', width: '4%', align: 'left' }
             ];
             formattedData = reportData.map(row => ({
               product_name: (row as any).product_name || row.subcategory || '',
@@ -2118,6 +2125,10 @@ export const ReportsManager: React.FC = () => {
               current_stock: (row as any).current_stock || 0,
               purchase_price: (row as any).purchase_price || 0,
               selling_price: (row as any).selling_price || 0,
+              profit: (row as any).profit ?? ((row as any).selling_price || 0) - ((row as any).purchase_price || 0),
+              profit_margin: (row as any).profit_margin ?? (((row as any).purchase_price || 0) > 0
+                ? ((((row as any).selling_price || 0) - ((row as any).purchase_price || 0)) / ((row as any).purchase_price || 0)) * 100
+                : 0),
               gst_rate: (row as any).gst_rate || 0,
               stock_value: (row as any).stock_value || row.amount || 0,
               status: (row as any).is_low_stock ? 'Low Stock' : 'In Stock'
@@ -2543,9 +2554,11 @@ export const ReportsManager: React.FC = () => {
                       <>
                         <TableHead>Product Name</TableHead>
                         <TableHead>HSN Code</TableHead>
-                        <TableHead className="text-right">Current Stock</TableHead>
+                        <TableHead className="text-right">Stock</TableHead>
                         <TableHead className="text-right">Purchase Price</TableHead>
                         <TableHead className="text-right">Selling Price</TableHead>
+                        <TableHead className="text-right">Profit</TableHead>
+                        <TableHead className="text-right">Profit Margin %</TableHead>
                         <TableHead className="text-right">GST %</TableHead>
                         <TableHead className="text-right">Stock Value</TableHead>
                         <TableHead>Status</TableHead>
@@ -2645,8 +2658,14 @@ export const ReportsManager: React.FC = () => {
                       {selectedReport === 'gst-report' && (
                         <>
                           <TableCell className="font-medium">
-                            <Badge variant={row.transaction_type === 'sale' ? 'default' : 'secondary'}>
-                              {row.transaction_type === 'sale' ? 'Sale' : 'Purchase'}
+                            <Badge variant={
+                              row.transaction_type === 'sale' ? 'default' :
+                              row.transaction_type === 'sale_return' ? 'destructive' :
+                              row.transaction_type === 'purchase_return' ? 'destructive' : 'secondary'
+                            }>
+                              {row.transaction_type === 'sale' ? 'Sale' :
+                               row.transaction_type === 'sale_return' ? 'Sale Return' :
+                               row.transaction_type === 'purchase_return' ? 'Purchase Return' : 'Purchase'}
                             </Badge>
                           </TableCell>
                           <TableCell>
@@ -2659,7 +2678,9 @@ export const ReportsManager: React.FC = () => {
                           </TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(row.taxable_amount || 0)}</TableCell>
                           <TableCell className="text-right">{row.gst_rate || 0}%</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(row.amount || 0)}</TableCell>
+                          <TableCell className={`text-right ${(row.amount || 0) < 0 ? 'text-red-600' : ''}`}>
+                            {(row.amount || 0) < 0 ? '-' : ''}{formatIndianCurrency(Math.abs(row.amount || 0))}
+                          </TableCell>
                         </>
                       )}
                       {selectedReport === 'payment-report' && (
@@ -2731,6 +2752,12 @@ export const ReportsManager: React.FC = () => {
                           <TableCell className="text-right">{(row as any).current_stock || 0}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency((row as any).purchase_price || 0)}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency((row as any).selling_price || 0)}</TableCell>
+                          <TableCell className={`text-right ${((row as any).profit ?? 0) < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            {formatIndianCurrency((row as any).profit ?? ((row as any).selling_price || 0) - ((row as any).purchase_price || 0))}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {Number((row as any).profit_margin ?? 0).toFixed(1)}%
+                          </TableCell>
                           <TableCell className="text-right">{(row as any).gst_rate || 0}%</TableCell>
                           <TableCell className="text-right font-medium">{formatIndianCurrency((row as any).stock_value || row.amount || 0)}</TableCell>
                           <TableCell>

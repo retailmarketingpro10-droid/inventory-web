@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Paperclip, Send, Loader2, Image as ImageIcon, FileText, ShieldCheck, Copy } from "lucide-react";
-import { askReportAI, AIChatMessage, AIReportAttachment, checkGeminiKey, KeyStatusResult } from "@/services/aiReportService";
+import { askReportAI, AIChatMessage, AIReportAttachment, checkGeminiKey, KeyStatusResult, getSuggestedQuestions } from "@/services/aiReportService";
 import { useToast } from "@/hooks/use-toast";
 
 interface ReportChatProps {
@@ -14,17 +14,25 @@ interface ReportChatProps {
 
 const MAX_TEXT_FILE_PREVIEW_CHARS = 20000;
 
+const getWelcomeMessage = (reportName?: string, reportId?: string): string => {
+  const reportLabel = reportName || "this report";
+  return `I can explain ${reportLabel}, its fields, and how the main figures are calculated. Ask me anything about the numbers, trends, or definitions. You can also attach images or files (PDF, Excel, CSV) for me to analyze alongside the report.`;
+};
+
 export const ReportChat: React.FC<ReportChatProps> = ({ reportContext, storageKey }) => {
+  const suggestedQuestions = useMemo(
+    () => getSuggestedQuestions(reportContext?.reportId || ""),
+    [reportContext?.reportId]
+  );
   const initialMessages = useMemo<AIChatMessage[]>(
     () => [
       {
         role: "assistant",
-        content:
-          "I can explain this report, its fields, and how the main figures are calculated. Ask me anything about the numbers, trends, or definitions.",
+        content: getWelcomeMessage(reportContext?.reportName, reportContext?.reportId),
         timestamp: new Date().toISOString(),
       },
     ],
-    []
+    [reportContext?.reportName, reportContext?.reportId]
   );
 
   const [messages, setMessages] = useState<AIChatMessage[]>(() => {
@@ -317,6 +325,22 @@ export const ReportChat: React.FC<ReportChatProps> = ({ reportContext, storageKe
         <div className="border border-border/70 rounded-2xl h-80 md:h-[26rem] bg-background/90">
           <ScrollArea className="h-full p-4">
             <div className="flex flex-col gap-3">
+              {messages.length === 1 && suggestedQuestions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  <span className="text-[10px] text-muted-foreground w-full">Try asking:</span>
+                  {suggestedQuestions.map((q, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setInput(q)}
+                      className="text-[10px] px-2 py-1 rounded-full bg-muted/70 hover:bg-muted text-muted-foreground hover:text-foreground border border-border/50 transition-colors text-left max-w-full truncate"
+                      title={q}
+                    >
+                      {q.length > 45 ? q.slice(0, 45) + "…" : q}
+                    </button>
+                  ))}
+                </div>
+              )}
               {messages.map((message, index) => (
                 <div
                   key={index}

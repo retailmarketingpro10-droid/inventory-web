@@ -946,74 +946,72 @@ export const InvoiceManager = () => {
         // For non-inventory invoices (transport, wholesale, labour, other), skip inventory updates
       }
 
-      // Create GST entry automatically (skip for return/refund invoices - treat as void)
-      const isReturnInvoice = formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return';
-      
-      if (!isReturnInvoice) {
-        // Only create GST entries for regular invoices, not returns/refunds (void transactions)
-        try {
-          // Get entity details for GST calculation
-          const entityDetails = await GSTSyncService.getEntityDetails(
-            formData.entity_id || '', 
-            formData.entity_type as any
-          );
+      // Create GST entry for all invoice types (including sale_return and purchase_return)
+      // Return invoices create negative GST entries that reduce output/input tax liability
+      try {
+        // Get entity details for GST calculation
+        const entityDetails = await GSTSyncService.getEntityDetails(
+          formData.entity_id || '', 
+          formData.entity_type as any
+        );
 
-          // Determine transaction type for GST entry
-          let gstTransactionType: 'sale' | 'purchase' = 'sale';
-          if (formData.invoice_type === 'sales') {
-            gstTransactionType = 'sale';
-          } else {
-            gstTransactionType = 'purchase';
-          }
+        // Map invoice_type to GST transaction_type (sale_return/purchase_return reduce tax liability)
+        type GstTransactionType = 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
+        let gstTransactionType: GstTransactionType = 'sale';
+        if (formData.invoice_type === 'sales') {
+          gstTransactionType = 'sale';
+        } else if (formData.invoice_type === 'sale_return') {
+          gstTransactionType = 'sale_return';
+        } else if (formData.invoice_type === 'purchase_return') {
+          gstTransactionType = 'purchase_return';
+        } else {
+          gstTransactionType = 'purchase';
+        }
 
-          const invoiceGSTData = {
-            invoice_id: invoice.id,
-            invoice_number: invoiceNumber,
-            invoice_date: formData.invoice_date,
-            transaction_type: gstTransactionType,
-            entity_name: (entityDetails as any)?.company_name || (entityDetails as any)?.name || (formData.entity_type === 'other' ? 'Miscellaneous' : 'Unknown'),
-            entity_id: formData.entity_id || '',
-            subtotal: totals.subtotalAfterDiscount, // Use subtotal after discount for GST calculation
-            tax_amount: totals.taxAmount,
-            total_amount: totals.total,
-            from_state: (entityDetails as any)?.state || '27',
-            to_state: companyState,
-            forceIGST: forceIGST, // Pass the forceIGST flag
-            line_items: lineItems.map(item => ({
-              description: item.description,
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              gst_rate: item.gst_rate,
-              line_total: item.quantity * item.unit_price
-            }))
-          };
+        const invoiceGSTData = {
+          invoice_id: invoice.id,
+          invoice_number: invoiceNumber,
+          invoice_date: formData.invoice_date,
+          transaction_type: gstTransactionType,
+          entity_name: (entityDetails as any)?.company_name || (entityDetails as any)?.name || (formData.entity_type === 'other' ? 'Miscellaneous' : 'Unknown'),
+          entity_id: formData.entity_id || '',
+          subtotal: totals.subtotalAfterDiscount, // Use subtotal after discount for GST calculation
+          tax_amount: totals.taxAmount,
+          total_amount: totals.total,
+          from_state: (entityDetails as any)?.state || '27',
+          to_state: companyState,
+          forceIGST: forceIGST, // Pass the forceIGST flag
+          line_items: lineItems.map(item => ({
+            description: item.description,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            gst_rate: item.gst_rate,
+            line_total: item.quantity * item.unit_price
+          }))
+        };
 
-          const gstResult = await GSTSyncService.createGSTEntryFromInvoice(invoiceGSTData);
-          if (gstResult.success) {
-            toast({ 
-              title: "Success", 
-              description: "Invoice created and GST entry added successfully" 
-            });
-          } else {
-            toast({ 
-              title: "Warning", 
-              description: "Invoice created but GST entry failed: " + gstResult.error,
-              variant: "destructive"
-            });
-          }
-        } catch (gstError) {
-          logger.error('GST sync error:', gstError);
+        const gstResult = await GSTSyncService.createGSTEntryFromInvoice(invoiceGSTData);
+        if (gstResult.success) {
+          const isReturn = formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return';
+          toast({ 
+            title: "Success", 
+            description: isReturn
+              ? "Return/Refund invoice created and GST entry added (return tax will reduce liability)"
+              : "Invoice created and GST entry added successfully" 
+          });
+        } else {
           toast({ 
             title: "Warning", 
-            description: "Invoice created but GST entry failed",
+            description: "Invoice created but GST entry failed: " + gstResult.error,
             variant: "destructive"
           });
         }
-      } else {
-        // Return/refund invoice - treated as void, no GST entry created
+      } catch (gstError) {
+        logger.error('GST sync error:', gstError);
         toast({ 
-          title: "Success", 
-          description: "Return/Refund invoice created (treated as void - excluded from calculations)" 
+          title: "Warning", 
+          description: "Invoice created but GST entry failed",
+          variant: "destructive"
         });
       }
       
