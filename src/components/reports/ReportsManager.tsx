@@ -18,7 +18,7 @@ import {
   BookOpen,
   Calendar,
   Clock,
-  Sync
+  RefreshCw
 } from 'lucide-react';
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { 
@@ -2365,9 +2365,9 @@ export const ReportsManager: React.FC = () => {
         <div className="flex gap-2">
           <Button onClick={handleGSTSync} variant="outline" disabled={gstSyncLoading} title="Sync existing invoices with GST entries (backfill return invoices)">
             {gstSyncLoading ? (
-              <Sync className="h-4 w-4 mr-2 animate-spin" />
+              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
             ) : (
-              <Sync className="h-4 w-4 mr-2" />
+              <RefreshCw className="h-4 w-4 mr-2" />
             )}
             Sync GST
           </Button>
