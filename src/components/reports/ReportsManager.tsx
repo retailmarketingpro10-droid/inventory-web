@@ -17,7 +17,8 @@ import {
   Receipt,
   BookOpen,
   Calendar,
-  Clock
+  Clock,
+  Sync
 } from 'lucide-react';
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { 
@@ -33,6 +34,7 @@ import { pdf } from '@react-pdf/renderer';
 import { downloadReportAsCSV } from '@/utils/pdfGenerator';
 import { logger } from '@/lib/logger';
 import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
+import { GSTSyncService } from '@/services/gstSyncService';
 
 interface ReportRow {
   subcategory: string;
@@ -114,7 +116,34 @@ export const ReportsManager: React.FC = () => {
     netProfit: 0
   });
   const [generatedTime, setGeneratedTime] = useState<string>('');
+  const [gstSyncLoading, setGstSyncLoading] = useState(false);
   const { toast } = useToast();
+
+  const handleGSTSync = async () => {
+    setGstSyncLoading(true);
+    try {
+      const results = await GSTSyncService.syncAllInvoicesWithGST();
+      const successCount = results.filter((r: any) => r.result?.success).length;
+      const errorCount = results.length - successCount;
+      toast({
+        title: "GST Sync Complete",
+        description: `Synced ${successCount} invoices. ${errorCount > 0 ? `${errorCount} skipped (already had entries).` : ''}`,
+        variant: errorCount > 0 ? "default" : "default"
+      });
+      if (selectedReport === 'gst-report') {
+        generateReport();
+      }
+    } catch (error: any) {
+      logger.error('GST sync error:', error);
+      toast({
+        title: "GST Sync Failed",
+        description: error?.message || "Failed to sync invoices with GST entries",
+        variant: "destructive"
+      });
+    } finally {
+      setGstSyncLoading(false);
+    }
+  };
 
   // Build a compact context object that can be passed to the AI assistant.
   const reportContext = selectedCompany
@@ -2334,6 +2363,14 @@ export const ReportsManager: React.FC = () => {
           <h2 className="text-2xl font-bold text-foreground">Reports</h2>
         </div>
         <div className="flex gap-2">
+          <Button onClick={handleGSTSync} variant="outline" disabled={gstSyncLoading} title="Sync existing invoices with GST entries (backfill return invoices)">
+            {gstSyncLoading ? (
+              <Sync className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Sync className="h-4 w-4 mr-2" />
+            )}
+            Sync GST
+          </Button>
           <Button onClick={() => exportReport('pdf')} variant="outline">
             <FileText className="h-4 w-4 mr-2" />
             Export PDF
