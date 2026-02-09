@@ -88,6 +88,7 @@ const App = () => (
             } />
             <Route path="/" element={<Landing />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            {/* This is the test for commits */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
