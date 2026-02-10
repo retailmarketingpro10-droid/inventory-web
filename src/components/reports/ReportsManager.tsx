@@ -403,124 +403,44 @@ export const ReportsManager: React.FC = () => {
             logger.error('Error fetching products for opening/closing stock:', productsError);
           }
 
-          // Calculate Opening and Closing Stock using Trading Account style ledger logic.
+          // Calculate Opening and Closing Stock based primarily on product master data.
           //
-          // For each product:
-          //   openingQty = purchases_before - purchase_returns_before - sales_before + sales_returns_before
-          //   closingQty = openingQty
-          //                + purchases_in_period - purchase_returns_in_period
-          //                - sales_in_period + sales_returns_in_period
+          // Opening Stock:
+          //   - Use imported opening_stock_qty (from Tally/ERP import) for each product.
+          //   - Value it at base purchase cost (purchase_price when available, otherwise
+          //     derive from opening_stock_value / opening_stock_qty).
           //
-          // Both opening and closing are valued at purchase_price (base cost, excluding GST).
+          // Closing Stock:
+          //   - Use current_stock for each product (live inventory at the time of report).
+          //   - Value it at the same base purchase cost.
+          //
+          // This matches the requirement: Opening Stock and Closing Stock should reflect
+          // total inventory cost (without GST), regardless of whether it came from
+          // bulk upload or manual entry, and must not use selling price.
           let openingStockValue = 0;
           let closingStockValue = 0;
 
           (products || []).forEach((product: any) => {
-            const purchasePrice = product.purchase_price || 0;
-            // Imported opening stock from Tally (used ONLY when there is no transaction history before the period)
             const importedOpeningQty = Number(product.opening_stock_qty) || 0;
+            const currentQty = Number(product.current_stock) || 0;
 
-            // --- Quantities BEFORE the period (for opening stock) ---
-            let qtyPurchasedBefore = 0;
-            (purchaseInvoiceItemsBeforePeriod || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                qtyPurchasedBefore += item.quantity || 0;
-              }
-            });
+            // Base purchase cost per unit
+            let costPerUnit = Number(product.purchase_price) || 0;
 
-            let qtyPurchaseReturnBefore = 0;
-            (purchaseReturnItemsBeforePeriod || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                qtyPurchaseReturnBefore += item.quantity || 0;
-              }
-            });
-
-            let qtySoldBefore = 0;
-            (salesInvoiceItemsBeforePeriod || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                qtySoldBefore += item.quantity || 0;
-              }
-            });
-
-            let qtySalesReturnBefore = 0;
-            (saleReturnItemsBeforePeriod || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                qtySalesReturnBefore += item.quantity || 0;
-              }
-            });
-
-            const hasHistoryBefore =
-              (qtyPurchasedBefore || 0) > 0 ||
-              (qtyPurchaseReturnBefore || 0) > 0 ||
-              (qtySoldBefore || 0) > 0 ||
-              (qtySalesReturnBefore || 0) > 0;
-
-            // More realistic opening stock:
-            // - If there is transaction history BEFORE the period, use pure ledger logic from those movements.
-            // - If there is NO history before the period, fall back to imported opening stock quantity from Tally.
-            const openingStockQty = hasHistoryBefore
-              ? Math.max(
-                  0,
-                  qtyPurchasedBefore
-                    - qtyPurchaseReturnBefore
-                    - qtySoldBefore
-                    + qtySalesReturnBefore
-                )
-              : importedOpeningQty;
-
-            // Prefer explicit purchase_price; if it's missing but we have an imported
-            // opening_stock_value, derive an effective base cost so Opening Stock
-            // reflects the original inventory cost (without tax) from imports.
-            let effectivePurchasePrice = purchasePrice;
-            if (
-              (!effectivePurchasePrice || Number.isNaN(effectivePurchasePrice)) &&
-              product.opening_stock_value &&
-              importedOpeningQty > 0
-            ) {
-              effectivePurchasePrice = Number(product.opening_stock_value) / importedOpeningQty;
+            // If purchase_price is missing but we have an imported opening stock value,
+            // derive an effective base cost from it.
+            if ((!costPerUnit || Number.isNaN(costPerUnit)) &&
+                product.opening_stock_value &&
+                importedOpeningQty > 0) {
+              costPerUnit = Number(product.opening_stock_value) / importedOpeningQty;
             }
 
-            openingStockValue += openingStockQty * (effectivePurchasePrice || 0);
+            if (!costPerUnit || Number.isNaN(costPerUnit)) {
+              costPerUnit = 0;
+            }
 
-            // --- Quantities INSIDE the period (from dateFrom to dateTo) ---
-            let quantityPurchasedInPeriod = 0;
-            (purchaseInvoiceItems || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                quantityPurchasedInPeriod += item.quantity || 0;
-              }
-            });
-
-            let quantitySoldInPeriod = 0;
-            (salesInvoiceItems || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                quantitySoldInPeriod += item.quantity || 0;
-              }
-            });
-
-            let salesReturnQtyInPeriod = 0;
-            (saleReturnItems || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                salesReturnQtyInPeriod += item.quantity || 0;
-              }
-            });
-
-            let purchaseReturnQtyInPeriod = 0;
-            (purchaseReturnItems || []).forEach((item) => {
-              if (item.product_id === product.id) {
-                purchaseReturnQtyInPeriod += item.quantity || 0;
-              }
-            });
-
-            const closingStockQty = Math.max(
-              0,
-              openingStockQty
-                + quantityPurchasedInPeriod
-                - purchaseReturnQtyInPeriod
-                - quantitySoldInPeriod
-                + salesReturnQtyInPeriod
-            );
-
-            closingStockValue += closingStockQty * (effectivePurchasePrice || 0);
+            openingStockValue += importedOpeningQty * costPerUnit;
+            closingStockValue += currentQty * costPerUnit;
           });
 
           const openingStockCost = openingStockValue;

@@ -207,7 +207,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
           }
 
           const openingQty = product.openingStock ?? product.currentStock ?? 0;
-          // Base cost for inventory (prefer explicit purchase cost, then last purchase rate, then generic rate)
+          // Base cost for inventory (used only for opening_stock_value when present)
           const baseCost =
             product.purchasePrice ??
             product.lastPurchaseRate ??
@@ -221,11 +221,10 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
             hsn_code: product.hsnCode || null,
             unit: product.unit || 'Nos',
             selling_price: product.sellingPrice || null,
-            // Ensure purchase_price is always populated with the same base cost
-            // that we use for opening_stock_value so P&L opening stock can value
-            // inventory correctly even when only "Rate" or "Last Purchase Rate"
-            // is present in the source file.
-            purchase_price: baseCost || null,
+            // Keep purchase_price as explicitly provided; do not
+            // auto-fill it from generic rate to avoid distorting
+            // existing P&L and stock valuations.
+            purchase_price: product.purchasePrice || null,
             gst_rate: product.gstRate || 18,
             current_stock: product.currentStock || 0,
             min_stock_level: product.minStock || 0,
