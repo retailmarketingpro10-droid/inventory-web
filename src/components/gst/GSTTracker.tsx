@@ -279,15 +279,9 @@ export const GSTTracker = () => {
       let totalTaxableAmount = 0;
 
       filteredData.forEach((entry: any) => {
-        // Treat return/refund transactions as void - exclude them completely from calculations
-        const isReturn = entry.transaction_type === 'sale_return' || entry.transaction_type === 'purchase_return';
-        
-        // Skip return/refund transactions entirely (treat as void)
-        if (isReturn) {
-          return; // Don't include in any calculations
-        }
-        
-        // Only process regular transactions (sales/purchases)
+        // Include both regular and return/refund transactions.
+        // Return invoices are stored in gst_entries with negative amounts,
+        // so including them here automatically reduces the net GST.
         totalTaxableAmount += (entry.taxable_amount || 0);
         
         // Only sum CGST and SGST if IGST is 0 (intra-state transactions)
@@ -299,12 +293,14 @@ export const GSTTracker = () => {
         totalIGST += (entry.igst || 0);
       });
 
+      // Do not clamp to zero: negative values indicate that
+      // returns/refunds exceeded regular transactions in the period.
       setGstBreakdown({
-        cgst: Math.max(0, totalCGST), // Ensure non-negative (though negative is valid for net calculations)
-        sgst: Math.max(0, totalSGST),
-        igst: Math.max(0, totalIGST),
-        total: Math.max(0, totalCGST + totalSGST + totalIGST),
-        taxableAmount: Math.max(0, totalTaxableAmount)
+        cgst: totalCGST,
+        sgst: totalSGST,
+        igst: totalIGST,
+        total: totalCGST + totalSGST + totalIGST,
+        taxableAmount: totalTaxableAmount
       });
     } catch (error: any) {
       logger.error('Error in fetchGSTData:', error);
@@ -555,27 +551,22 @@ export const GSTTracker = () => {
                   return invoice.invoice_items && invoice.invoice_items.some((item: any) => Math.round(item.gst_rate) === rate);
                 });
                 
-                // Filter out return/refund transactions (treat as void)
-                const regularTransactions = rateData.filter(inv => {
-                  const transType = (inv as any).transaction_type || inv.invoice_type;
-                  return transType !== 'sale_return' && transType !== 'purchase_return';
-                });
-                
-                // Calculate totals: only include regular transactions (returns excluded as void)
-                const rateTotal = regularTransactions.reduce((sum, inv) => sum + inv.total_amount, 0);
-                const rateTaxable = regularTransactions.reduce((sum, inv) => sum + inv.subtotal, 0);
-                const rateTax = regularTransactions.reduce((sum, inv) => sum + inv.tax_amount, 0);
+                // Include both regular and return/refund transactions.
+                // Return entries have negative amounts and will naturally reduce the net totals.
+                const rateTotal = rateData.reduce((sum, inv) => sum + inv.total_amount, 0);
+                const rateTaxable = rateData.reduce((sum, inv) => sum + inv.subtotal, 0);
+                const rateTax = rateData.reduce((sum, inv) => sum + inv.tax_amount, 0);
                 
                 return (
                   <div key={rate} className="bg-muted/30 rounded-lg p-4 text-center border">
                     <div className="text-2xl font-bold text-primary mb-2">{rate}%</div>
                     <div className="text-sm text-muted-foreground mb-1">
-                      {regularTransactions.length} transaction{regularTransactions.length !== 1 ? 's' : ''}
+                      {rateData.length} transaction{rateData.length !== 1 ? 's' : ''}
                     </div>
-                    <div className="text-xs text-muted-foreground mb-2">Taxable: {formatIndianCurrency(Math.max(0, rateTaxable))}</div>
-                    <div className="font-medium text-lg mb-1">GST: {formatIndianCurrency(Math.max(0, rateTax))}</div>
+                    <div className="text-xs text-muted-foreground mb-2">Taxable: {formatIndianCurrency(rateTaxable)}</div>
+                    <div className="font-medium text-lg mb-1">GST: {formatIndianCurrency(rateTax)}</div>
                     <div className={`font-semibold ${rateTotal < 0 ? 'text-red-600' : ''}`}>
-                      Total: {formatIndianCurrency(Math.max(0, rateTotal))}
+                      Total: {formatIndianCurrency(rateTotal)}
                     </div>
                   </div>
                 );
