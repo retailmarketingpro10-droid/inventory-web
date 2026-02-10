@@ -393,10 +393,10 @@ export const ReportsManager: React.FC = () => {
             purchaseReturnItemsBeforePeriod = purchaseReturnItemsBeforeData || [];
           }
 
-          // Fetch all products
+          // Fetch all products (including imported opening stock quantity used for first-period opening stock)
           const { data: products, error: productsError } = await supabase
             .from('products')
-            .select('id, current_stock, purchase_price, selling_price, gst_rate')
+            .select('id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value')
             .eq('company_id', selectedCompany.company_name);
 
           if (productsError) {
@@ -415,8 +415,10 @@ export const ReportsManager: React.FC = () => {
           let openingStockValue = 0;
           let closingStockValue = 0;
 
-          (products || []).forEach((product) => {
+          (products || []).forEach((product: any) => {
             const purchasePrice = product.purchase_price || 0;
+            // Imported opening stock from Tally (used ONLY when there is no transaction history before the period)
+            const importedOpeningQty = Number(product.opening_stock_qty) || 0;
 
             // --- Quantities BEFORE the period (for opening stock) ---
             let qtyPurchasedBefore = 0;
@@ -447,13 +449,24 @@ export const ReportsManager: React.FC = () => {
               }
             });
 
-            const openingStockQty = Math.max(
-              0,
-              qtyPurchasedBefore
-                - qtyPurchaseReturnBefore
-                - qtySoldBefore
-                + qtySalesReturnBefore
-            );
+            const hasHistoryBefore =
+              (qtyPurchasedBefore || 0) > 0 ||
+              (qtyPurchaseReturnBefore || 0) > 0 ||
+              (qtySoldBefore || 0) > 0 ||
+              (qtySalesReturnBefore || 0) > 0;
+
+            // More realistic opening stock:
+            // - If there is transaction history BEFORE the period, use pure ledger logic from those movements.
+            // - If there is NO history before the period, fall back to imported opening stock quantity from Tally.
+            const openingStockQty = hasHistoryBefore
+              ? Math.max(
+                  0,
+                  qtyPurchasedBefore
+                    - qtyPurchaseReturnBefore
+                    - qtySoldBefore
+                    + qtySalesReturnBefore
+                )
+              : importedOpeningQty;
 
             openingStockValue += openingStockQty * purchasePrice;
 

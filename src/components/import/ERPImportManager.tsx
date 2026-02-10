@@ -206,6 +206,13 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
             supplierId = supplierMap.get(supplierKey) || null;
           }
 
+          const openingQty = product.openingStock ?? product.currentStock ?? 0;
+          const baseCost =
+            product.purchasePrice ??
+            product.lastPurchaseRate ??
+            product.rate ??
+            0;
+
           return {
             name: product.name,
             sku: product.sku?.trim() || null,
@@ -218,7 +225,10 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
             current_stock: product.currentStock || 0,
             min_stock_level: product.minStock || 0,
             max_stock_level: product.maxStock || null,
-            supplier_id: supplierId
+            supplier_id: supplierId,
+            // Opening stock is used only for reporting (P&L opening stock), not for live stock movements.
+            opening_stock_qty: openingQty,
+            opening_stock_value: openingQty * baseCost
           };
         });
 
