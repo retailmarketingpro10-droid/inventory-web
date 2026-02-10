@@ -468,7 +468,19 @@ export const ReportsManager: React.FC = () => {
                 )
               : importedOpeningQty;
 
-            openingStockValue += openingStockQty * purchasePrice;
+            // Prefer explicit purchase_price; if it's missing but we have an imported
+            // opening_stock_value, derive an effective base cost so Opening Stock
+            // reflects the original inventory cost (without tax) from imports.
+            let effectivePurchasePrice = purchasePrice;
+            if (
+              (!effectivePurchasePrice || Number.isNaN(effectivePurchasePrice)) &&
+              product.opening_stock_value &&
+              importedOpeningQty > 0
+            ) {
+              effectivePurchasePrice = Number(product.opening_stock_value) / importedOpeningQty;
+            }
+
+            openingStockValue += openingStockQty * (effectivePurchasePrice || 0);
 
             // --- Quantities INSIDE the period (from dateFrom to dateTo) ---
             let quantityPurchasedInPeriod = 0;
@@ -508,7 +520,7 @@ export const ReportsManager: React.FC = () => {
                 + salesReturnQtyInPeriod
             );
 
-            closingStockValue += closingStockQty * purchasePrice;
+            closingStockValue += closingStockQty * (effectivePurchasePrice || 0);
           });
 
           const openingStockCost = openingStockValue;
