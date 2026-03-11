@@ -206,13 +206,25 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
             supplierId = supplierMap.get(supplierKey) || null;
           }
 
-          const openingQty = product.openingStock ?? product.currentStock ?? 0;
+          // Opening stock is for reporting (P&L opening stock) and should
+          // come from an explicit opening quantity in the ERP file, not
+          // from the current live stock figure.
+          const openingQty = product.openingStockQty ?? 0;
+
           // Base cost for inventory (used only for opening_stock_value when present)
           const baseCost =
             product.purchasePrice ??
-            product.lastPurchaseRate ??
-            product.rate ??
+            // Fallbacks from legacy files, if present on the parsed object
+            (product as any).lastPurchaseRate ??
+            (product as any).rate ??
             0;
+
+          // If the ERP file provided an explicit opening value, prefer it.
+          // Otherwise, derive it from openingQty × baseCost when both are sensible.
+          let openingValue = product.openingStockValue ?? null;
+          if ((openingValue === null || typeof openingValue === 'undefined') && openingQty > 0 && baseCost > 0) {
+            openingValue = openingQty * baseCost;
+          }
 
           return {
             name: product.name,
@@ -232,7 +244,7 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
             supplier_id: supplierId,
             // Opening stock is used only for reporting (P&L opening stock), not for live stock movements.
             opening_stock_qty: openingQty,
-            opening_stock_value: openingQty * baseCost
+            opening_stock_value: openingValue
           };
         });
 

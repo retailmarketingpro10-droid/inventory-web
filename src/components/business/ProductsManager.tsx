@@ -39,6 +39,8 @@ interface Product {
   current_stock: number;
   min_stock_level: number;
   max_stock_level: number | null;
+  opening_stock_qty?: number | null;
+  opening_stock_value?: number | null;
 }
 
 interface Supplier {
@@ -72,7 +74,9 @@ export const ProductsManager = () => {
     current_stock: "0",
     min_stock_level: "0",
     max_stock_level: "",
-    supplier_id: ""
+    supplier_id: "",
+    opening_stock_qty: "",
+    opening_stock_value: ""
   });
   const [newSupplierData, setNewSupplierData] = useState({
     company_name: "",
@@ -158,6 +162,14 @@ export const ProductsManager = () => {
         min_stock_level: parseInt(formData.min_stock_level),
         max_stock_level: formData.max_stock_level ? parseInt(formData.max_stock_level) : null,
         supplier_id: formData.supplier_id || null,
+        // Opening stock is used only for reporting (P&L opening stock),
+        // and should not be confused with current live stock.
+        opening_stock_qty: formData.opening_stock_qty
+          ? parseFloat(formData.opening_stock_qty)
+          : null,
+        opening_stock_value: formData.opening_stock_value
+          ? parseFloat(formData.opening_stock_value)
+          : null,
         user_id: user.id,
         company_id: selectedCompany?.company_name || null
       };
@@ -391,7 +403,9 @@ export const ProductsManager = () => {
       current_stock: "0",
       min_stock_level: "0",
       max_stock_level: "",
-      supplier_id: ""
+      supplier_id: "",
+      opening_stock_qty: "",
+      opening_stock_value: ""
     });
     setEditingProduct(null);
     setOpen(false);
@@ -410,7 +424,9 @@ export const ProductsManager = () => {
       current_stock: product.current_stock.toString(),
       min_stock_level: product.min_stock_level.toString(),
       max_stock_level: product.max_stock_level?.toString() || "",
-      supplier_id: (product as any).supplier_id || ""
+      supplier_id: (product as any).supplier_id || "",
+      opening_stock_qty: (product as any).opening_stock_qty?.toString() || "",
+      opening_stock_value: (product as any).opening_stock_value?.toString() || ""
     });
     setEditingProduct(product);
     setOpen(true);
@@ -633,6 +649,39 @@ export const ProductsManager = () => {
                     value={formData.max_stock_level}
                     onChange={(e) => setFormData(prev => ({ ...prev, max_stock_level: e.target.value }))}
                   />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="opening_stock_qty">
+                    Opening Stock Qty (for first period only)
+                  </Label>
+                  <Input
+                    id="opening_stock_qty"
+                    type="number"
+                    value={formData.opening_stock_qty}
+                    onChange={(e) =>
+                      setFormData(prev => ({ ...prev, opening_stock_qty: e.target.value }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="opening_stock_value">
+                    Opening Stock Value (total cost)
+                  </Label>
+                  <Input
+                    id="opening_stock_value"
+                    type="number"
+                    step="0.01"
+                    value={formData.opening_stock_value}
+                    onChange={(e) =>
+                      setFormData(prev => ({ ...prev, opening_stock_value: e.target.value }))
+                    }
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Used for P&amp;L opening stock valuation. Does not change live stock movements.
+                  </p>
                 </div>
               </div>
 

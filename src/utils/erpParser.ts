@@ -5,9 +5,13 @@ export interface ERPProduct {
   description?: string;
   category?: string;
   unit?: string;
+  // Live stock at the time of export from ERP
   currentStock?: number;
   minStock?: number;
   maxStock?: number;
+  // Opening stock at the start of the financial year/period (for reporting)
+  openingStockQty?: number;
+  openingStockValue?: number;
   sellingPrice?: number;
   purchasePrice?: number;
   mrp?: number;
@@ -66,6 +70,8 @@ const PRODUCT_FIELD_MAPPINGS = {
   
   // Units and stock
   unit: ['Unit', 'UOM', 'Unit of Measure', 'Primary Unit', 'Base Unit'],
+  openingStockQty: ['Opening Stock Qty', 'Opening Stock Quantity', 'Opening Qty', 'Opening Balance Qty'],
+  openingStockValue: ['Opening Stock Value', 'Opening Value', 'Opening Stock Amount'],
   currentStock: ['Current Stock', 'Stock', 'Quantity', 'Qty', 'Balance', 'Available Stock', 'On Hand'],
   minStock: ['Min Stock', 'Minimum Stock', 'Min Level', 'Reorder Level', 'ROL'],
   maxStock: ['Max Stock', 'Maximum Stock', 'Max Level'],
@@ -289,10 +295,11 @@ function mapProductField(product: Partial<ERPProduct>, field: string, value: str
     case 'supplierAddress':
       (product as any)[field] = value;
       break;
-      
+
+    case 'openingStockQty':
     case 'currentStock':
     case 'minStock':
-    case 'maxStock':
+    case 'maxStock': {
       const qty = parseFloat(value.replace(/[^0-9.-]/g, ''));
       if (!isNaN(qty) && qty >= 0) {
         (product as any)[field] = qty;
@@ -300,7 +307,9 @@ function mapProductField(product: Partial<ERPProduct>, field: string, value: str
         warnings.push(`Invalid quantity for ${field}: ${value}`);
       }
       break;
-      
+    }
+
+    case 'openingStockValue':
     case 'sellingPrice':
     case 'purchasePrice':
     case 'mrp':
@@ -428,6 +437,8 @@ export function generateSampleCSV(type: 'products' | 'suppliers'): string {
       'Description',
       'Category',
       'Unit',
+      'Opening Stock Qty',
+      'Opening Stock Value',
       'Current Stock',
       'Min Stock',
       'Selling Price',
@@ -451,6 +462,8 @@ export function generateSampleCSV(type: 'products' | 'suppliers'): string {
         'TMT Bar 12mm Fe500D',
         'Construction Materials',
         'Kg',
+        '500',
+        '30000',
         '1000',
         '100',
         '65.50',
@@ -472,6 +485,8 @@ export function generateSampleCSV(type: 'products' | 'suppliers'): string {
         'Ordinary Portland Cement 53 Grade',
         'Construction Materials',
         'Bag',
+        '200',
+        '80000',
         '500',
         '50',
         '420.00',
@@ -493,6 +508,8 @@ export function generateSampleCSV(type: 'products' | 'suppliers'): string {
         'Smartphone with 128GB storage',
         'Electronics',
         'Nos',
+        '10',
+        '120000',
         '25',
         '5',
         '15000.00',

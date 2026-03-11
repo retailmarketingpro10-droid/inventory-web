@@ -311,6 +311,20 @@ export function getCurrentFinancialYear(): { start: Date; end: Date; label: stri
   };
 }
 
+export function getFinancialYearForDate(date: Date): { start: Date; end: Date; label: string } {
+  const year = date.getFullYear();
+  const month = date.getMonth(); // 0-based
+
+  const startYear = month >= 3 ? year : year - 1; // FY starts April 1
+  const endYear = startYear + 1;
+
+  return {
+    start: new Date(startYear, 3, 1),
+    end: new Date(endYear, 2, 31),
+    label: `FY ${startYear}-${endYear.toString().slice(-2)}`,
+  };
+}
+
 export function getQuarterFromDate(date: Date): { quarter: number; fy: string } {
   const fy = getCurrentFinancialYear();
   const month = date.getMonth(); // 0-based

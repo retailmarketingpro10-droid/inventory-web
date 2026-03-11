@@ -50,6 +50,7 @@ interface LedgerEntry {
   status: 'paid' | 'due' | 'partial';
   financial_year: string;
   ledger_id: string;
+  transaction_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -973,7 +974,28 @@ export const LedgerManager = () => {
                             <TableCell>
                               {new Date(entry.entry_date).toLocaleDateString('en-IN')}
                             </TableCell>
-                            <TableCell>{entry.description}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate">{entry.description}</span>
+                                <div className="flex items-center gap-2">
+                                  {!entry.transaction_id && (
+                                    <Badge variant="outline" className="text-xs">
+                                      Legacy
+                                    </Badge>
+                                  )}
+                                  {(Number(entry.debit_amount) > 0 && Number(entry.credit_amount) > 0) && (
+                                    <Badge variant="destructive" className="text-xs">
+                                      Invalid
+                                    </Badge>
+                                  )}
+                                  {(Number(entry.debit_amount) === 0 && Number(entry.credit_amount) === 0) && (
+                                    <Badge variant="destructive" className="text-xs">
+                                      Invalid
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
                             <TableCell className="text-right">
                               {entry.debit_amount > 0 ? formatIndianCurrency(entry.debit_amount) : '-'}
                             </TableCell>

@@ -12,11 +12,12 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
 import { Plus, FileText, Download, Edit, Trash2, Eye, Receipt } from "lucide-react";
-import { formatIndianCurrency, calculateGST } from "@/utils/indianBusiness";
+import { formatIndianCurrency, calculateGST, getFinancialYearForDate } from "@/utils/indianBusiness";
 import { downloadInvoiceAsCSV } from "@/utils/pdfGenerator";
 import { InvoicePDF } from "@/components/pdf/InvoicePDF";
 import { pdf } from "@react-pdf/renderer";
 import { GSTSyncService } from "@/services/gstSyncService";
+import { createLedgerTransaction, LedgerPostingLine } from "@/services/ledgerPostingService";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -815,6 +816,94 @@ export const InvoiceManager = () => {
       if (itemsError) {
         logger.error('Error creating invoice items:', itemsError);
         throw new Error(`Failed to create invoice items: ${itemsError.message || 'Unknown error'}`);
+      }
+
+      // Post a basic double-entry transaction for this invoice into ledgers, if ledgers exist.
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        const userId = userData.user?.id;
+        if (userId && selectedCompany?.company_name) {
+          // Fetch ledgers for this company and user to identify standard heads.
+          const { data: ledgersData } = await (supabase as any)
+            .from("ledgers")
+            .select("id, ledger_type")
+            .eq("company_id", selectedCompany.company_name)
+            .eq("user_id", userId);
+
+          const ledgers = (ledgersData || []) as Array<{ id: string; ledger_type: string }>;
+          const findLedger = (type: string) =>
+            ledgers.find((l) => l.ledger_type.toLowerCase() === type.toLowerCase())?.id;
+
+          const cashLedgerId = findLedger("cash");
+          const bankLedgerId = findLedger("bank");
+          const salesLedgerId = findLedger("income");
+          const purchaseLedgerId = findLedger("expense");
+          const receivablesLedgerId = findLedger("receivables");
+          const payablesLedgerId = findLedger("payables");
+
+          const lines: LedgerPostingLine[] = [];
+
+          // Very simple mapping just to get double-entry behaviour started.
+          // This covers sales, purchases, and their returns.
+          const amount = totals.total;
+          const fy = getFinancialYearForDate(new Date(formData.invoice_date)).label;
+
+          if (formData.invoice_type === "sales") {
+            // Debit Cash/Bank or Receivables, Credit Sales
+            const debitLedger =
+              formData.payment_status === "paid"
+                ? cashLedgerId || bankLedgerId || receivablesLedgerId
+                : receivablesLedgerId || cashLedgerId || bankLedgerId;
+            if (debitLedger && salesLedgerId) {
+              lines.push({ ledger_id: debitLedger, amount, side: "debit" });
+              lines.push({ ledger_id: salesLedgerId, amount, side: "credit" });
+            }
+          } else if (formData.invoice_type === "sale_return") {
+            // Reverse of sales: Debit Sales (reduce income), Credit Cash/Bank or Receivables
+            const creditLedger =
+              formData.payment_status === "paid"
+                ? cashLedgerId || bankLedgerId || receivablesLedgerId
+                : receivablesLedgerId || cashLedgerId || bankLedgerId;
+            if (salesLedgerId && creditLedger) {
+              lines.push({ ledger_id: salesLedgerId, amount, side: "debit" });
+              lines.push({ ledger_id: creditLedger, amount, side: "credit" });
+            }
+          } else if (formData.invoice_type === "purchase") {
+            // Debit Purchases/Expenses, Credit Cash/Bank or Payables
+            const creditLedger =
+              formData.payment_status === "paid"
+                ? cashLedgerId || bankLedgerId || payablesLedgerId
+                : payablesLedgerId || cashLedgerId || bankLedgerId;
+            if (purchaseLedgerId && creditLedger) {
+              lines.push({ ledger_id: purchaseLedgerId, amount, side: "debit" });
+              lines.push({ ledger_id: creditLedger, amount, side: "credit" });
+            }
+          } else if (formData.invoice_type === "purchase_return") {
+            // Reverse of purchase: Debit Cash/Bank or Payables, Credit Purchases/Expenses
+            const debitLedger =
+              formData.payment_status === "paid"
+                ? cashLedgerId || bankLedgerId || payablesLedgerId
+                : payablesLedgerId || cashLedgerId || bankLedgerId;
+            if (debitLedger && purchaseLedgerId) {
+              lines.push({ ledger_id: debitLedger, amount, side: "debit" });
+              lines.push({ ledger_id: purchaseLedgerId, amount, side: "credit" });
+            }
+          }
+
+          if (lines.length >= 2) {
+            await createLedgerTransaction({
+              description: `Invoice ${invoice.invoice_number} (${formData.invoice_type})`,
+              companyId: selectedCompany.company_name,
+              financialYear: fy,
+              userId,
+              entryDate: formData.invoice_date,
+              lines,
+            });
+          }
+        }
+      } catch (ledgerError) {
+        // Log but don't block invoice creation if ledger posting fails
+        logger.error("Ledger posting for invoice failed (non-blocking):", ledgerError);
       }
 
       // Update inventory based on invoice type

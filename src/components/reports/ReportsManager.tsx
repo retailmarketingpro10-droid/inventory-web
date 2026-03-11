@@ -35,6 +35,8 @@ import { downloadReportAsCSV } from '@/utils/pdfGenerator';
 import { logger } from '@/lib/logger';
 import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
 import { GSTSyncService } from '@/services/gstSyncService';
+import { getCurrentFinancialYear } from '@/utils/indianBusiness';
+import { getInventoryAsOf } from '@/services/inventoryValuationService';
 
 interface ReportRow {
   subcategory: string;
@@ -117,6 +119,8 @@ export const ReportsManager: React.FC = () => {
   });
   const [generatedTime, setGeneratedTime] = useState<string>('');
   const [gstSyncLoading, setGstSyncLoading] = useState(false);
+  const [inventoryAsOfMode, setInventoryAsOfMode] = useState(false);
+  const [showValidation, setShowValidation] = useState(false);
   const { toast } = useToast();
 
   const handleGSTSync = async () => {
@@ -393,6 +397,29 @@ export const ReportsManager: React.FC = () => {
             purchaseReturnItemsBeforePeriod = purchaseReturnItemsBeforeData || [];
           }
 
+          // Helper to aggregate quantities per product
+          const createQtyMap = (items: any[]) => {
+            const map = new Map<string, number>();
+            (items || []).forEach((item: any) => {
+              const productId = String(item.product_id);
+              const qty = Number(item.quantity) || 0;
+              map.set(productId, (map.get(productId) || 0) + qty);
+            });
+            return map;
+          };
+
+          // Quantity movements before the reporting period (to derive opening stock for this period)
+          const salesBeforeQtyMap = createQtyMap(salesInvoiceItemsBeforePeriod);
+          const saleReturnsBeforeQtyMap = createQtyMap(saleReturnItemsBeforePeriod);
+          const purchaseBeforeQtyMap = createQtyMap(purchaseInvoiceItemsBeforePeriod);
+          const purchaseReturnsBeforeQtyMap = createQtyMap(purchaseReturnItemsBeforePeriod);
+
+          // Quantity movements inside the reporting period (to derive closing stock at period end)
+          const salesPeriodQtyMap = createQtyMap(salesInvoiceItems);
+          const saleReturnsPeriodQtyMap = createQtyMap(saleReturnItems);
+          const purchasePeriodQtyMap = createQtyMap(purchaseInvoiceItems);
+          const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
+
           // Fetch all products (including imported opening stock quantity used for first-period opening stock)
           const { data: products, error: productsError } = await supabase
             .from('products')
@@ -403,26 +430,31 @@ export const ReportsManager: React.FC = () => {
             logger.error('Error fetching products for opening/closing stock:', productsError);
           }
 
-          // Calculate Opening and Closing Stock based primarily on product master data.
+          // Calculate Opening and Closing Stock based on product master data plus
+          // actual invoice movements, so that stock is period-correct.
           //
           // Opening Stock:
-          //   - Use imported opening_stock_qty (from Tally/ERP import) for each product.
+          //   - Start from imported opening_stock_qty (from Tally/ERP import) for each product.
+          //   - Adjust by all purchases, purchase returns, sales, and sale returns
+          //     BEFORE the reporting period to get quantity at dateFrom.
           //   - Value it at base purchase cost (purchase_price when available, otherwise
           //     derive from opening_stock_value / opening_stock_qty).
           //
           // Closing Stock:
-          //   - Use current_stock for each product (live inventory at the time of report).
+          //   - Take the period opening quantity and apply movements INSIDE the period
+          //     (purchases, purchase returns, sales, sale returns) to get quantity at dateTo.
           //   - Value it at the same base purchase cost.
           //
           // This matches the requirement: Opening Stock and Closing Stock should reflect
           // total inventory cost (without GST), regardless of whether it came from
-          // bulk upload or manual entry, and must not use selling price.
+          // bulk upload or manual entry, and must not use selling price or \"live\"
+          // current_stock outside the report period.
           let openingStockValue = 0;
           let closingStockValue = 0;
 
           (products || []).forEach((product: any) => {
+            const productId = String(product.id);
             const importedOpeningQty = Number(product.opening_stock_qty) || 0;
-            const currentQty = Number(product.current_stock) || 0;
 
             // Base purchase cost per unit
             let costPerUnit = Number(product.purchase_price) || 0;
@@ -439,8 +471,24 @@ export const ReportsManager: React.FC = () => {
               costPerUnit = 0;
             }
 
-            openingStockValue += importedOpeningQty * costPerUnit;
-            closingStockValue += currentQty * costPerUnit;
+            // Derive quantity at the start of the period (opening qty for this report)
+            const openingQtyForPeriod =
+              importedOpeningQty +
+              (purchaseBeforeQtyMap.get(productId) || 0) -
+              (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
+              (salesBeforeQtyMap.get(productId) || 0) +
+              (saleReturnsBeforeQtyMap.get(productId) || 0);
+
+            // Derive quantity at the end of the period (closing qty for this report)
+            const closingQtyForPeriod =
+              openingQtyForPeriod +
+              (purchasePeriodQtyMap.get(productId) || 0) -
+              (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
+              (salesPeriodQtyMap.get(productId) || 0) +
+              (saleReturnsPeriodQtyMap.get(productId) || 0);
+
+            openingStockValue += openingQtyForPeriod * costPerUnit;
+            closingStockValue += closingQtyForPeriod * costPerUnit;
           });
 
           const openingStockCost = openingStockValue;
@@ -1168,11 +1216,16 @@ export const ReportsManager: React.FC = () => {
               throw new Error('User not authenticated');
             }
 
+            // Derive a financial year label from the current date range to align with LedgerManager
+            const fyUtils = getCurrentFinancialYear();
+            const financialYearLabel = fyUtils.label;
+
             const { data: ledgersData, error: ledgersError } = await supabase
               .from('ledgers')
               .select('id, name, ledger_type, current_balance, opening_balance')
               .eq('company_id', selectedCompany.company_name)
-              .eq('user_id', user.id);
+              .eq('user_id', user.id)
+              .eq('financial_year', financialYearLabel);
 
             if (ledgersError) {
               logger.error('Error fetching ledgers:', ledgersError);
@@ -1182,15 +1235,16 @@ export const ReportsManager: React.FC = () => {
             // Initialize with empty array if no ledgers found
             const ledgers = ledgersData || [];
             const ledgerIds = ledgers.map(l => l.id);
-            let ledgerEntriesMap = new Map<string, { debits: number; credits: number }>();
+            let ledgerEntriesMap = new Map<string, { debits: number; credits: number; legacy: number }>();
             
             // Fetch ledger entries for the period to calculate debits and credits
             if (ledgerIds.length > 0) {
               const { data: entriesData, error: entriesError } = await supabase
                 .from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount')
+                .select('ledger_id, debit_amount, credit_amount, transaction_id')
                 .in('ledger_id', ledgerIds)
                 .eq('user_id', user.id)
+                .eq('financial_year', financialYearLabel)
                 .gte('entry_date', dateFrom)
                 .lte('entry_date', dateTo);
 
@@ -1200,10 +1254,11 @@ export const ReportsManager: React.FC = () => {
               } else {
                 (entriesData || []).forEach(entry => {
                   const ledgerId = entry.ledger_id;
-                  const current = ledgerEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
+                  const current = ledgerEntriesMap.get(ledgerId) || { debits: 0, credits: 0, legacy: 0 };
                   ledgerEntriesMap.set(ledgerId, {
                     debits: current.debits + (Number(entry.debit_amount) || 0),
-                    credits: current.credits + (Number(entry.credit_amount) || 0)
+                    credits: current.credits + (Number(entry.credit_amount) || 0),
+                    legacy: current.legacy + (!entry.transaction_id ? 1 : 0),
                   });
                 });
               }
@@ -1211,7 +1266,7 @@ export const ReportsManager: React.FC = () => {
 
             // Calculate all ledgers with opening, debits, credits, and closing balance
             sampleData = ledgers.map((l: any) => {
-              const entries = ledgerEntriesMap.get(l.id) || { debits: 0, credits: 0 };
+              const entries = ledgerEntriesMap.get(l.id) || { debits: 0, credits: 0, legacy: 0 };
               const openingBalance = Number(l.opening_balance) || 0;
               const debits = Number(entries.debits) || 0;
               const credits = Number(entries.credits) || 0;
@@ -1240,7 +1295,8 @@ export const ReportsManager: React.FC = () => {
                 debits: debits,
                 credits: credits,
                 closing_balance: closingBalance,
-                difference: closingBalance - openingBalance
+                difference: closingBalance - openingBalance,
+                legacy_entries: Number(entries.legacy) || 0,
               };
             });
 
@@ -1250,6 +1306,9 @@ export const ReportsManager: React.FC = () => {
               : 0;
             const totalCredits = ledgerEntriesMap.size > 0
               ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.credits) || 0), 0)
+              : 0;
+            const legacyEntries = ledgerEntriesMap.size > 0
+              ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.legacy) || 0), 0)
               : 0;
             const totalOpening = ledgers.length > 0
               ? ledgers.reduce((sum, l: any) => sum + (Number(l.opening_balance) || 0), 0)
@@ -1263,7 +1322,8 @@ export const ReportsManager: React.FC = () => {
               totalSales: totalCredits,
               totalPurchases: totalDebits,
               grossProfit: totalClosing - totalOpening,
-              netProfit: difference // Store difference for display
+              netProfit: difference, // Store difference for display
+              legacyEntries,
             };
             
             // Show message if no ledgers found
@@ -1895,48 +1955,97 @@ export const ReportsManager: React.FC = () => {
 
         case 'inventory-report': {
           try {
-            // Fetch all products for the company
-            const { data: products, error: productsError } = await supabase
-              .from('products')
-              .select('id, name, description, hsn_code, current_stock, purchase_price, selling_price, gst_rate, min_stock_level')
-              .eq('company_id', selectedCompany.company_name)
-              .order('name', { ascending: true });
+            if (inventoryAsOfMode) {
+              // Movement-based inventory snapshot as-of dateTo (period-correct)
+              const asOf = await getInventoryAsOf({
+                companyId: selectedCompany.company_name,
+                asOfDate: dateTo,
+              });
 
-            if (productsError) {
-              logger.error('Error fetching products:', productsError);
-              throw productsError;
+              // Still need selling/min stock for UI columns
+              const { data: productsExtra, error: productsExtraError } = await supabase
+                .from("products")
+                .select("id, selling_price, min_stock_level, description")
+                .eq("company_id", selectedCompany.company_name);
+
+              if (productsExtraError) {
+                logger.error("Error fetching product extras:", productsExtraError);
+              }
+
+              const extraMap = new Map<string, any>(
+                (productsExtra || []).map((p: any) => [String(p.id), p])
+              );
+
+              sampleData = asOf.map((row) => {
+                const extra = extraMap.get(String(row.product_id)) || {};
+                const sellingPrice = Number(extra.selling_price) || 0;
+                const minStock = Number(extra.min_stock_level) || 0;
+                const profit = sellingPrice - (row.unit_cost || 0);
+                const profitMargin =
+                  (row.unit_cost || 0) > 0 ? (profit / (row.unit_cost || 0)) * 100 : 0;
+
+                return {
+                  subcategory: row.product_name || "Unknown",
+                  amount: row.stock_value,
+                  category: extra.description || "",
+                  product_name: row.product_name,
+                  hsn_code: row.hsn_code || "",
+                  current_stock: row.quantity_as_of,
+                  purchase_price: row.unit_cost,
+                  selling_price: sellingPrice,
+                  gst_rate: row.gst_rate || 0,
+                  min_stock_level: minStock,
+                  stock_value: row.stock_value,
+                  is_low_stock: minStock > 0 && (row.quantity_as_of || 0) < minStock,
+                  profit,
+                  profit_margin: profitMargin,
+                  valuation_mode: "as_of",
+                };
+              });
+            } else {
+              // Live snapshot using product master current_stock
+              const { data: products, error: productsError } = await supabase
+                .from('products')
+                .select('id, name, description, hsn_code, current_stock, purchase_price, selling_price, gst_rate, min_stock_level')
+                .eq('company_id', selectedCompany.company_name)
+                .order('name', { ascending: true });
+
+              if (productsError) {
+                logger.error('Error fetching products:', productsError);
+                throw productsError;
+              }
+
+              // Map products to report rows
+              sampleData = (products || []).map((product: any) => {
+                const purchasePrice = product.purchase_price || 0;
+                const sellingPrice = product.selling_price || 0;
+                const stockValue = (product.current_stock || 0) * purchasePrice;
+                const isLowStock = product.min_stock_level && (product.current_stock || 0) < product.min_stock_level;
+                const profit = sellingPrice - purchasePrice;
+                const profitMargin = purchasePrice > 0 ? ((profit / purchasePrice) * 100) : 0;
+                
+                return {
+                  subcategory: product.name || 'Unknown',
+                  amount: stockValue,
+                  category: product.description || '',
+                  product_name: product.name || '',
+                  description: product.description || '',
+                  hsn_code: product.hsn_code || '',
+                  current_stock: product.current_stock || 0,
+                  purchase_price: purchasePrice,
+                  selling_price: sellingPrice,
+                  gst_rate: product.gst_rate || 0,
+                  min_stock_level: product.min_stock_level || 0,
+                  stock_value: stockValue,
+                  is_low_stock: isLowStock,
+                  profit,
+                  profit_margin: profitMargin
+                };
+              });
             }
 
-            // Map products to report rows
-            sampleData = (products || []).map((product: any) => {
-              const purchasePrice = product.purchase_price || 0;
-              const sellingPrice = product.selling_price || 0;
-              const stockValue = (product.current_stock || 0) * purchasePrice;
-              const isLowStock = product.min_stock_level && (product.current_stock || 0) < product.min_stock_level;
-              const profit = sellingPrice - purchasePrice;
-              const profitMargin = purchasePrice > 0 ? ((profit / purchasePrice) * 100) : 0;
-              
-              return {
-                subcategory: product.name || 'Unknown',
-                amount: stockValue,
-                category: product.description || '',
-                product_name: product.name || '',
-                description: product.description || '',
-                hsn_code: product.hsn_code || '',
-                current_stock: product.current_stock || 0,
-                purchase_price: purchasePrice,
-                selling_price: sellingPrice,
-                gst_rate: product.gst_rate || 0,
-                min_stock_level: product.min_stock_level || 0,
-                stock_value: stockValue,
-                is_low_stock: isLowStock,
-                profit,
-                profit_margin: profitMargin
-              };
-            });
-
             // Calculate totals
-            const totalProducts = products?.length || 0;
+            const totalProducts = sampleData.length || 0;
             const totalStockValue = sampleData.reduce((sum, item: any) => sum + (item.stock_value || 0), 0);
             const lowStockCount = sampleData.filter((item: any) => item.is_low_stock).length;
 
@@ -1944,7 +2053,8 @@ export const ReportsManager: React.FC = () => {
               totalSales: totalProducts,
               totalPurchases: totalStockValue,
               grossProfit: lowStockCount,
-              netProfit: totalStockValue
+              netProfit: totalStockValue,
+              valuationMode: inventoryAsOfMode ? `as-of ${dateTo}` : "live",
             };
 
             console.log(`Inventory report: Found ${totalProducts} products, Total stock value: ${totalStockValue}`);
@@ -2403,6 +2513,26 @@ export const ReportsManager: React.FC = () => {
               </Button>
             </div>
           </div>
+
+          {selectedReport === "inventory-report" && (
+            <div className="mt-4 flex items-center justify-between rounded-md border p-3 bg-muted/30">
+              <div>
+                <p className="text-sm font-medium">Valuation Mode</p>
+                <p className="text-xs text-muted-foreground">
+                  Live uses product current stock. As-of uses invoice movements + opening stock up to the selected To Date.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm select-none">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={inventoryAsOfMode}
+                  onChange={(e) => setInventoryAsOfMode(e.target.checked)}
+                />
+                Use as-of date
+              </label>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -2438,9 +2568,23 @@ export const ReportsManager: React.FC = () => {
                     )}
                   </CardDescription>
                 </div>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Clock className="h-4 w-4" />
-                  <span>Generated: {generatedTime}</span>
+                <div className="flex items-center gap-2">
+                  {(selectedReport === "profit-loss" ||
+                    selectedReport === "trial-balance" ||
+                    selectedReport === "inventory-report") && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowValidation((v) => !v)}
+                      title="Show reconciliation/validation details"
+                    >
+                      {showValidation ? "Hide Validation" : "Show Validation"}
+                    </Button>
+                  )}
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Clock className="h-4 w-4" />
+                    <span>Generated: {generatedTime}</span>
+                  </div>
                 </div>
               </div>
             </CardHeader>
@@ -2587,7 +2731,16 @@ export const ReportsManager: React.FC = () => {
                       )}
                       {selectedReport === 'trial-balance' && (
                         <>
-                          <TableCell className="font-medium">{row.subcategory}</TableCell>
+                          <TableCell className="font-medium">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate">{row.subcategory}</span>
+                              {(Number((row as any).legacy_entries) || 0) > 0 && (
+                                <Badge variant="outline" className="text-xs">
+                                  Legacy {(row as any).legacy_entries}
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell>{row.category}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(Number(row.opening_balance) || 0)}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(Number(row.debits) || 0)}</TableCell>
@@ -2841,59 +2994,49 @@ export const ReportsManager: React.FC = () => {
                       </p>
                     </div>
                     
-                    {/* Demo Calculation Breakdown */}
-                    <div className="col-span-2 md:col-span-4 mt-4 p-4 bg-muted/50 rounded-lg">
-                      <p className="text-sm font-semibold mb-3">Calculation Breakdown:</p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                        <div className="space-y-1">
-                          <p className="font-semibold text-sm mb-2">Cost of Goods Sold (COGS):</p>
-                          <p className="text-muted-foreground">
-                            Opening Stock: {formatIndianCurrency((summary as any).openingStock || 0)}
-                          </p>
-                          <p className="text-muted-foreground">
-                            + Net Purchases: {formatIndianCurrency(summary.totalPurchases || 0)}
-                          </p>
-                          <p className="text-muted-foreground">
-                            + Direct Expenses: {formatIndianCurrency((summary as any).directExpenses || 0)}
-                          </p>
-                          <p className="text-muted-foreground">
-                            − Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}
-                          </p>
-                          <p className="font-semibold mt-2 text-green-600">
-                            = COGS: {formatIndianCurrency((summary as any).cogs || 0)}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="font-semibold text-sm mb-2">Gross Profit:</p>
-                          <p className="text-muted-foreground">Net Sales: {formatIndianCurrency(summary.totalSales || 0)}</p>
-                          <p className="text-muted-foreground">- COGS: {formatIndianCurrency((summary as any).cogs || 0)}</p>
-                          <p className="font-semibold mt-2 text-green-600">= Gross Profit: {formatIndianCurrency(summary.grossProfit || 0)}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="font-semibold text-sm mb-2">Net Profit:</p>
-                          <p className="text-muted-foreground">Gross Profit: {formatIndianCurrency(summary.grossProfit || 0)}</p>
-                          <p className="text-muted-foreground">- Indirect Expenses: {formatIndianCurrency((summary as any).indirectExpenses || 0)}</p>
-                          <p className="text-muted-foreground">  (Sales Discounts: {formatIndianCurrency((summary as any).salesDiscounts || 0)})</p>
-                          <p className="text-muted-foreground">+ Indirect Income: {formatIndianCurrency((summary as any).indirectIncome || 0)}</p>
-                          <p className="font-semibold mt-2 text-green-600">= Net Profit: {formatIndianCurrency(summary.netProfit || 0)}</p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="font-semibold text-sm mb-2">Closing Stock Formula (per product):</p>
-                          <p className="text-muted-foreground text-xs">
-                            Opening Qty = Purchases(before) − Purchase Returns(before) − Sales(before) + Sales Returns(before)
-                          </p>
-                          <p className="text-muted-foreground text-xs mt-1">
-                            Closing Qty = Opening Qty + Purchases(period) − Purchase Returns(period) − Sales(period) + Sales Returns(period)
-                          </p>
-                          <p className="text-muted-foreground text-xs mt-2">
-                            Closing Stock = Σ(Closing Qty × Unit Cost)
-                          </p>
-                          <p className="text-muted-foreground text-xs mt-2">
-                            Closing Stock Value: {formatIndianCurrency((summary as any).closingStock || 0)}
-                          </p>
+                    {showValidation && (
+                      <div className="col-span-2 md:col-span-4 mt-4 p-4 bg-muted/50 rounded-lg">
+                        <p className="text-sm font-semibold mb-3">Validation (P&amp;L reconciliation)</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                          <div className="space-y-1">
+                            <p className="font-semibold text-sm mb-2">Cost of Goods Sold (COGS)</p>
+                            <p className="text-muted-foreground">
+                              Opening Stock: {formatIndianCurrency((summary as any).openingStock || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              + Net Purchases: {formatIndianCurrency(summary.totalPurchases || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              + Direct Expenses: {formatIndianCurrency((summary as any).directExpenses || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              − Closing Stock: {formatIndianCurrency((summary as any).closingStock || 0)}
+                            </p>
+                            <p className="font-semibold mt-2 text-green-600">
+                              = COGS: {formatIndianCurrency((summary as any).cogs || 0)}
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-sm mb-2">Profit</p>
+                            <p className="text-muted-foreground">
+                              Net Sales: {formatIndianCurrency(summary.totalSales || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              Gross Profit: {formatIndianCurrency(summary.grossProfit || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              Indirect Expenses: {formatIndianCurrency((summary as any).indirectExpenses || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              Indirect Income: {formatIndianCurrency((summary as any).indirectIncome || 0)}
+                            </p>
+                            <p className="font-semibold mt-2 text-green-600">
+                              Net Profit: {formatIndianCurrency(summary.netProfit || 0)}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </>
                 )}
                 
@@ -2918,6 +3061,38 @@ export const ReportsManager: React.FC = () => {
                         {summary.netProfit !== 0 && (summary.netProfit < 0 ? ' (Dr)' : ' (Cr)')}
                       </p>
                     </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Legacy Lines</p>
+                      <p className={`text-lg font-semibold ${(summary as any).legacyEntries > 0 ? 'text-warning' : ''}`}>
+                        {Number((summary as any).legacyEntries || 0)}
+                      </p>
+                    </div>
+                    {showValidation && (
+                      <div className="col-span-2 md:col-span-4 mt-4 p-4 bg-muted/50 rounded-lg">
+                        <p className="text-sm font-semibold mb-3">Validation (Trial Balance)</p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                          <div className="space-y-1">
+                            <p className="text-muted-foreground">
+                              Total Debits: {formatIndianCurrency(summary.totalPurchases || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              Total Credits: {formatIndianCurrency(summary.totalSales || 0)}
+                            </p>
+                            <p className="font-semibold mt-2">
+                              Difference: {formatIndianCurrency(Math.abs(summary.netProfit || 0))}{summary.netProfit ? (summary.netProfit < 0 ? " (Dr)" : " (Cr)") : ""}
+                            </p>
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-muted-foreground">
+                              Legacy Lines (no transaction id): {Number((summary as any).legacyEntries || 0)}
+                            </p>
+                            <p className="text-muted-foreground">
+                              New postings are linked + balanced via ledger transactions.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 
@@ -2970,6 +3145,17 @@ export const ReportsManager: React.FC = () => {
                         {summary.grossProfit}
                       </p>
                     </div>
+                    {showValidation && (
+                      <div className="col-span-2 md:col-span-4 mt-4 p-4 bg-muted/50 rounded-lg">
+                        <p className="text-sm font-semibold mb-3">Validation (Inventory valuation)</p>
+                        <p className="text-xs text-muted-foreground">
+                          Mode: {(summary as any).valuationMode || (inventoryAsOfMode ? `as-of ${dateTo}` : "live")}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          As-of mode values stock using opening stock + invoice movements up to the To Date, at unit cost (purchase price or derived opening cost).
+                        </p>
+                      </div>
+                    )}
                   </>
                 )}
                 
