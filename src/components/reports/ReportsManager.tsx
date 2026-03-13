@@ -451,10 +451,14 @@ export const ReportsManager: React.FC = () => {
           // current_stock outside the report period.
           let openingStockValue = 0;
           let closingStockValue = 0;
+          let productsWithoutCompany = 0;
+          let productsWithOpeningValueButNoQty = 0;
+          let productsWithOpeningValueButNoQtyAndMovements = 0;
 
           (products || []).forEach((product: any) => {
             const productId = String(product.id);
             const importedOpeningQty = Number(product.opening_stock_qty) || 0;
+            const importedOpeningValue = Number(product.opening_stock_value) || 0;
 
             // Base purchase cost per unit
             let costPerUnit = Number(product.purchase_price) || 0;
@@ -487,9 +491,53 @@ export const ReportsManager: React.FC = () => {
               (salesPeriodQtyMap.get(productId) || 0) +
               (saleReturnsPeriodQtyMap.get(productId) || 0);
 
+            const movementsBefore =
+              (purchaseBeforeQtyMap.get(productId) || 0) -
+              (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
+              (salesBeforeQtyMap.get(productId) || 0) +
+              (saleReturnsBeforeQtyMap.get(productId) || 0);
+
+            const movementsInPeriod =
+              (purchasePeriodQtyMap.get(productId) || 0) -
+              (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
+              (salesPeriodQtyMap.get(productId) || 0) +
+              (saleReturnsPeriodQtyMap.get(productId) || 0);
+
+            // If user imported only an opening value but not an opening qty,
+            // qty-based valuation will show 0. In that case, we can still reflect
+            // the opening value ONLY when there are no invoice movements for the product
+            // (because we cannot reliably adjust value without quantities).
+            if (importedOpeningQty <= 0 && importedOpeningValue > 0) {
+              productsWithOpeningValueButNoQty += 1;
+              if (movementsBefore === 0 && movementsInPeriod === 0) {
+                openingStockValue += importedOpeningValue;
+                closingStockValue += importedOpeningValue;
+                return;
+              }
+              productsWithOpeningValueButNoQtyAndMovements += 1;
+            }
+
             openingStockValue += openingQtyForPeriod * costPerUnit;
             closingStockValue += closingQtyForPeriod * costPerUnit;
           });
+
+          if ((products || []).length === 0) {
+            toast({
+              title: "Inventory not found for company",
+              description:
+                "No products found for this company, so Opening/Closing Stock will be 0. Please ensure products were created/imported under the selected company.",
+              variant: "default",
+            });
+          } else if (productsWithOpeningValueButNoQty > 0) {
+            toast({
+              title: "Opening stock data needs qty",
+              description:
+                productsWithOpeningValueButNoQtyAndMovements > 0
+                  ? `${productsWithOpeningValueButNoQty} product(s) have Opening Stock Value but no Opening Stock Qty. ${productsWithOpeningValueButNoQtyAndMovements} of them also have invoice movements, so valuation may be incorrect. Please set Opening Stock Qty for accurate reports.`
+                  : `${productsWithOpeningValueButNoQty} product(s) have Opening Stock Value but no Opening Stock Qty. Opening value is shown only when there are no movements. Please set Opening Stock Qty for accurate reports.`,
+              variant: "default",
+            });
+          }
 
           const openingStockCost = openingStockValue;
           const closingStock = closingStockValue;

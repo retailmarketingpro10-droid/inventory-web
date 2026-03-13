@@ -170,10 +170,13 @@ export async function generateProfitAndLossReport(
 
   let openingStockValue = 0;
   let closingStockValue = 0;
+  let productsWithOpeningValueButNoQty = 0;
+  let productsWithOpeningValueButNoQtyAndMovements = 0;
 
   (products || []).forEach((product: any) => {
     const productId = String(product.id);
     const importedOpeningQty = Number(product.opening_stock_qty) || 0;
+    const importedOpeningValue = Number(product.opening_stock_value) || 0;
 
     let costPerUnit = Number(product.purchase_price) || 0;
     if ((!costPerUnit || Number.isNaN(costPerUnit)) && product.opening_stock_value && importedOpeningQty > 0) {
@@ -197,9 +200,40 @@ export async function generateProfitAndLossReport(
       (salesPeriodQtyMap.get(productId) || 0) +
       (saleReturnsPeriodQtyMap.get(productId) || 0);
 
+    const movementsBefore =
+      (purchaseBeforeQtyMap.get(productId) || 0) -
+      (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
+      (salesBeforeQtyMap.get(productId) || 0) +
+      (saleReturnsBeforeQtyMap.get(productId) || 0);
+
+    const movementsInPeriod =
+      (purchasePeriodQtyMap.get(productId) || 0) -
+      (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
+      (salesPeriodQtyMap.get(productId) || 0) +
+      (saleReturnsPeriodQtyMap.get(productId) || 0);
+
+    if (importedOpeningQty <= 0 && importedOpeningValue > 0) {
+      productsWithOpeningValueButNoQty += 1;
+      if (movementsBefore === 0 && movementsInPeriod === 0) {
+        openingStockValue += importedOpeningValue;
+        closingStockValue += importedOpeningValue;
+        return;
+      }
+      productsWithOpeningValueButNoQtyAndMovements += 1;
+    }
+
     openingStockValue += openingQtyForPeriod * costPerUnit;
     closingStockValue += closingQtyForPeriod * costPerUnit;
   });
+
+  if (productsWithOpeningValueButNoQty > 0) {
+    logger.warn(
+      `P&L: ${productsWithOpeningValueButNoQty} product(s) have opening_stock_value but no opening_stock_qty. ` +
+        (productsWithOpeningValueButNoQtyAndMovements > 0
+          ? `${productsWithOpeningValueButNoQtyAndMovements} of them also have movements; valuation may be incorrect until qty is set.`
+          : `Opening value is only reflected when there are no movements.`)
+    );
+  }
 
   const openingStockCost = openingStockValue;
   const closingStock = closingStockValue;
