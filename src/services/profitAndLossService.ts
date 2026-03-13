@@ -172,11 +172,13 @@ export async function generateProfitAndLossReport(
   let closingStockValue = 0;
   let productsWithOpeningValueButNoQty = 0;
   let productsWithOpeningValueButNoQtyAndMovements = 0;
+  let productsUsingCurrentStockAsOpening = 0;
 
   (products || []).forEach((product: any) => {
     const productId = String(product.id);
     const importedOpeningQty = Number(product.opening_stock_qty) || 0;
     const importedOpeningValue = Number(product.opening_stock_value) || 0;
+    const currentStock = Number(product.current_stock) || 0;
 
     let costPerUnit = Number(product.purchase_price) || 0;
     if ((!costPerUnit || Number.isNaN(costPerUnit)) && product.opening_stock_value && importedOpeningQty > 0) {
@@ -222,6 +224,18 @@ export async function generateProfitAndLossReport(
       productsWithOpeningValueButNoQtyAndMovements += 1;
     }
 
+    if (
+      importedOpeningQty <= 0 &&
+      importedOpeningValue <= 0 &&
+      currentStock > 0 &&
+      costPerUnit > 0
+    ) {
+      openingStockValue += currentStock * costPerUnit;
+      closingStockValue += currentStock * costPerUnit;
+      productsUsingCurrentStockAsOpening += 1;
+      return;
+    }
+
     openingStockValue += openingQtyForPeriod * costPerUnit;
     closingStockValue += closingQtyForPeriod * costPerUnit;
   });
@@ -232,6 +246,12 @@ export async function generateProfitAndLossReport(
         (productsWithOpeningValueButNoQtyAndMovements > 0
           ? `${productsWithOpeningValueButNoQtyAndMovements} of them also have movements; valuation may be incorrect until qty is set.`
           : `Opening value is only reflected when there are no movements.`)
+    );
+  }
+
+  if (productsUsingCurrentStockAsOpening > 0) {
+    logger.info(
+      `P&L: Using current_stock × purchase_price as opening/closing stock for ${productsUsingCurrentStockAsOpening} product(s) with no explicit opening stock and no movements in the selected period.`
     );
   }
 

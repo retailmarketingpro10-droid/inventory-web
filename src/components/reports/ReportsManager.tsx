@@ -421,13 +421,26 @@ export const ReportsManager: React.FC = () => {
           const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
 
           // Fetch all products (including imported opening stock quantity used for first-period opening stock)
-          const { data: products, error: productsError } = await supabase
+          let { data: products, error: productsError } = await supabase
             .from('products')
             .select('id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value')
             .eq('company_id', selectedCompany.company_name);
 
           if (productsError) {
             logger.error('Error fetching products for opening/closing stock:', productsError);
+          }
+
+          // Fallback: if no products are tied to this company_id, try all products
+          if (!products || products.length === 0) {
+            const { data: fallback, error: fallbackError } = await supabase
+              .from('products')
+              .select('id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value');
+
+            if (fallbackError) {
+              logger.error('Error fetching fallback products for opening/closing stock:', fallbackError);
+            } else {
+              products = fallback || [];
+            }
           }
 
           // Calculate Opening and Closing Stock based on product master data plus
@@ -451,14 +464,15 @@ export const ReportsManager: React.FC = () => {
           // current_stock outside the report period.
           let openingStockValue = 0;
           let closingStockValue = 0;
-          let productsWithoutCompany = 0;
           let productsWithOpeningValueButNoQty = 0;
           let productsWithOpeningValueButNoQtyAndMovements = 0;
+          let productsUsingCurrentStockAsOpening = 0;
 
           (products || []).forEach((product: any) => {
             const productId = String(product.id);
             const importedOpeningQty = Number(product.opening_stock_qty) || 0;
             const importedOpeningValue = Number(product.opening_stock_value) || 0;
+            const currentStock = Number(product.current_stock) || 0;
 
             // Base purchase cost per unit
             let costPerUnit = Number(product.purchase_price) || 0;
@@ -517,15 +531,31 @@ export const ReportsManager: React.FC = () => {
               productsWithOpeningValueButNoQtyAndMovements += 1;
             }
 
+            // If there is no explicit opening stock (qty/value) but we do have a
+            // current_stock and a usable cost, treat current_stock × cost as the
+            // opening (and closing) inventory for this period. This matches common
+            // migration scenarios where only live stock was imported.
+            if (
+              importedOpeningQty <= 0 &&
+              importedOpeningValue <= 0 &&
+              currentStock > 0 &&
+              costPerUnit > 0
+            ) {
+              openingStockValue += currentStock * costPerUnit;
+              closingStockValue += currentStock * costPerUnit;
+              productsUsingCurrentStockAsOpening += 1;
+              return;
+            }
+
             openingStockValue += openingQtyForPeriod * costPerUnit;
             closingStockValue += closingQtyForPeriod * costPerUnit;
           });
 
           if ((products || []).length === 0) {
             toast({
-              title: "Inventory not found for company",
+              title: "Inventory not found",
               description:
-                "No products found for this company, so Opening/Closing Stock will be 0. Please ensure products were created/imported under the selected company.",
+                "No products found at all, so Opening/Closing Stock will be 0. Please ensure products were created/imported.",
               variant: "default",
             });
           } else if (productsWithOpeningValueButNoQty > 0) {
@@ -535,6 +565,12 @@ export const ReportsManager: React.FC = () => {
                 productsWithOpeningValueButNoQtyAndMovements > 0
                   ? `${productsWithOpeningValueButNoQty} product(s) have Opening Stock Value but no Opening Stock Qty. ${productsWithOpeningValueButNoQtyAndMovements} of them also have invoice movements, so valuation may be incorrect. Please set Opening Stock Qty for accurate reports.`
                   : `${productsWithOpeningValueButNoQty} product(s) have Opening Stock Value but no Opening Stock Qty. Opening value is shown only when there are no movements. Please set Opening Stock Qty for accurate reports.`,
+              variant: "default",
+            });
+          } else if (productsUsingCurrentStockAsOpening > 0) {
+            toast({
+              title: "Using current stock as opening",
+              description: `${productsUsingCurrentStockAsOpening} product(s) do not have explicit opening stock, but have current stock and no movements. Current Stock × Purchase Price is being treated as Opening/Closing Stock for this period.`,
               variant: "default",
             });
           }
