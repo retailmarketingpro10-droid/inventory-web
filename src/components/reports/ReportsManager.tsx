@@ -532,13 +532,17 @@ export const ReportsManager: React.FC = () => {
             }
 
             // If there is no explicit opening stock (qty/value) but we do have a
-            // current_stock and a usable cost, treat current_stock × cost as the
-            // opening (and closing) inventory for this period. This matches common
-            // migration scenarios where only live stock was imported.
+            // current_stock and a usable cost, and there have been NO invoice
+            // movements for this product (before or in the selected period),
+            // treat current_stock × cost as the opening (and closing) inventory.
+            // This is a migration shortcut for the very first period only; once
+            // movements exist, opening must come from opening_stock and history.
             if (
               importedOpeningQty <= 0 &&
               importedOpeningValue <= 0 &&
               currentStock > 0 &&
+              movementsBefore === 0 &&
+              movementsInPeriod === 0 &&
               costPerUnit > 0
             ) {
               openingStockValue += currentStock * costPerUnit;

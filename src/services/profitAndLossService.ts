@@ -228,6 +228,8 @@ export async function generateProfitAndLossReport(
       importedOpeningQty <= 0 &&
       importedOpeningValue <= 0 &&
       currentStock > 0 &&
+      movementsBefore === 0 &&
+      movementsInPeriod === 0 &&
       costPerUnit > 0
     ) {
       openingStockValue += currentStock * costPerUnit;
