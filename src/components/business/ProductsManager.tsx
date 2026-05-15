@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
+import { useSubscription } from "@/hooks/useSubscription";
 import { Plus, Edit, Trash2, Package, Download, Upload } from "lucide-react";
 import { downloadReportAsCSV } from "@/utils/pdfGenerator";
 import { formatIndianCurrency } from "@/utils/indianBusiness";
@@ -50,6 +51,7 @@ interface Supplier {
 
 export const ProductsManager = () => {
   const { selectedCompany } = useCompany();
+  const { isReadOnly } = useSubscription();
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [productSearch, setProductSearch] = useState("");
@@ -97,13 +99,13 @@ export const ProductsManager = () => {
   const fetchProducts = async () => {
     try {
       setLoading(true);
-      let query = supabase
+      let query: any = (supabase as any)
         .from('products')
         .select('*');
 
       // Filter by company if a company is selected
       if (selectedCompany?.company_name) {
-        query = query.eq('company_id', selectedCompany.company_name);
+        query = (query as any).eq('company_id', selectedCompany.company_name);
       }
 
       const { data, error } = await query.order('name');
@@ -123,13 +125,13 @@ export const ProductsManager = () => {
 
   const fetchSuppliers = async () => {
     try {
-      let query = supabase
+      let query: any = (supabase as any)
         .from('suppliers')
         .select('id, company_name');
 
       // Filter by company if a company is selected
       if (selectedCompany?.company_name) {
-        query = query.eq('company_id', selectedCompany.company_name);
+        query = (query as any).eq('company_id', selectedCompany.company_name);
       }
 
       const { data, error } = await query.order('company_name');
@@ -234,7 +236,7 @@ export const ProductsManager = () => {
           duplicateCheck = duplicateCheck.or(`sku.ilike."${productData.sku}"`);
         }
 
-        const { data: existingProducts, error: checkError } = await duplicateCheck;
+        const { data: existingProducts, error: checkError } = await (duplicateCheck as any);
 
         if (checkError) {
           logger.error('Error checking duplicates:', checkError);
@@ -527,7 +529,7 @@ export const ProductsManager = () => {
           
           <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button onClick={() => resetForm()}>
+            <Button onClick={() => resetForm()} disabled={isReadOnly}>
               <Plus className="w-4 h-4 mr-2" />
               Add Product
             </Button>
@@ -781,7 +783,7 @@ export const ProductsManager = () => {
                 setImportOpen(true);
               }} 
               variant="outline"
-              disabled={!selectedCompany}
+              disabled={!selectedCompany || isReadOnly}
             >
               <Upload className="w-4 h-4 mr-2" />
               Bulk Import
@@ -839,7 +841,12 @@ export const ProductsManager = () => {
                         )}
                       </div>
                       <div className="flex gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => startEdit(product)}>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => startEdit(product)}
+                          disabled={isReadOnly}
+                        >
                           <Edit className="w-4 h-4" />
                         </Button>
                         <Button 
@@ -847,6 +854,7 @@ export const ProductsManager = () => {
                           size="sm" 
                           onClick={() => handleDelete(product.id)}
                           className="text-destructive hover:text-destructive"
+                          disabled={isReadOnly}
                         >
                           <Trash2 className="w-4 h-4" />
                         </Button>

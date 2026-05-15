@@ -121,6 +121,44 @@ const Auth = () => {
     }
   };
 
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: email.split('@')[0], // Default name
+          }
+        }
+      });
+
+      if (error) {
+        if (error.message.includes('already registered')) {
+          // Auto-login existing user as requested
+          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+          if (signInError) {
+            setError('Account already exists. Please check your password and sign in.');
+          }
+          // Success handled by auth state change
+          return;
+        }
+        setError(error.message);
+      } else if (data.user) {
+        toast.success('Account created successfully!');
+        navigate('/dashboard');
+      }
+    } catch (err) {
+      setError('An unexpected error occurred during signup');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleContactSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmittingContact(true);
@@ -357,61 +395,59 @@ Inventory Migrator Team
       `}</style>
 
       <div className="w-full max-w-6xl relative z-10 space-y-8">
-        {/* Sign Up Notice Banner - Ultra-Premium */}
+        {/* Signup View */}
         {currentView === 'signup' && (
-          <Card className="relative overflow-hidden border-2 border-orange-500/40 bg-gradient-to-br from-orange-950/95 via-orange-900/85 to-amber-950/95 backdrop-blur-2xl shadow-2xl premium-glow">
-            <div className="absolute inset-0 bg-gradient-to-r from-orange-500/10 via-amber-500/5 to-orange-500/10 animate-pulse"></div>
-            <div className="absolute inset-0 shimmer-effect opacity-30"></div>
-            
-            <CardContent className="p-8 md:p-10 relative z-10">
-              <div className="flex flex-col lg:flex-row items-start lg:items-center gap-8">
-                <div className="flex items-start gap-5 flex-1">
-                  <div className="relative">
-                    <div className="absolute inset-0 bg-orange-500/60 rounded-full blur-2xl animate-pulse"></div>
-                    <div className="relative bg-gradient-to-br from-orange-500 to-amber-600 rounded-full p-4 shadow-2xl">
-                      <AlertCircle className="h-7 w-7 text-white drop-shadow-lg" />
-                    </div>
+          <div className="w-full max-w-md mx-auto">
+            <Card className="relative z-10 shadow-2xl border-2 border-primary/30 backdrop-blur-2xl bg-gradient-to-br from-slate-900/80 via-slate-800/70 to-slate-900/80 overflow-hidden group hover:border-primary/50 transition-all duration-500 premium-glow">
+              <CardHeader className="text-center pb-10 pt-10 relative z-10">
+                <CardTitle className="text-3xl font-black bg-gradient-to-r from-white via-primary to-blue-400 bg-clip-text text-transparent mb-3">
+                  Create Account
+                </CardTitle>
+                <CardDescription className="text-lg font-semibold text-foreground/80">
+                  Join our premium inventory system
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="relative z-10 pb-10">
+                <form onSubmit={handleSignUp} className="space-y-6">
+                  <div className="space-y-3">
+                    <Label className="text-sm font-bold flex items-center gap-2">
+                       <Mail className="h-4 w-4 text-primary" /> Email Address
+                    </Label>
+                    <Input
+                      type="email"
+                      placeholder="Enter your email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="bg-slate-800/50 border-white/10"
+                      required
+                    />
                   </div>
-                  <div className="flex-1">
-                    <h3 className="text-2xl md:text-3xl font-black text-white mb-3 drop-shadow-lg">
-                      Sign Up Available Only on Mobile App
-                    </h3>
-                    <p className="text-base md:text-lg text-orange-100/90 leading-relaxed max-w-2xl">
-                      To create an account and get started, please download our mobile app from the App Store or Google Play Store. The web application is for account management only.
-                    </p>
+                  <div className="space-y-3">
+                    <Label className="text-sm font-bold flex items-center gap-2">
+                       <Lock className="h-4 w-4 text-primary" /> Password
+                    </Label>
+                    <Input
+                      type="password"
+                      placeholder="Create a password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="bg-slate-800/50 border-white/10"
+                      required
+                    />
                   </div>
-                </div>
-                <div className="flex flex-col sm:flex-row gap-4 w-full lg:w-auto lg:flex-shrink-0">
-                  <Button
-                    asChild
-                    className="relative overflow-hidden bg-white hover:bg-gray-50 text-gray-900 border-2 border-gray-200 hover:border-gray-300 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105 font-bold h-14 px-8 group"
-                  >
-                    <a href="https://play.google.com/store" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3">
-                      <svg className="w-7 h-7" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M3,20.5V3.5C3,2.91 3.34,2.39 3.84,2.15L13.69,12L3.84,21.85C3.34,21.6 3,21.09 3,20.5M16.81,15.12L6.05,21.34L14.54,12.85L16.81,15.12M20.16,10.81C20.5,11.08 20.75,11.5 20.75,12C20.75,12.5 20.53,12.9 20.18,13.18L17.89,14.5L15.39,12L17.89,9.5L20.16,10.81M6.05,2.66L16.81,8.88L14.54,11.15L6.05,2.66Z" />
-                      </svg>
-                      <span className="font-bold">Google Play Store</span>
-                      <ExternalLink className="w-5 h-5 opacity-70" />
-                      <span className="absolute inset-0 bg-gradient-to-r from-transparent via-gray-200/30 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></span>
-                    </a>
+                  {error && <div className="text-red-500 text-sm">{error}</div>}
+                  <Button type="submit" className="w-full h-14 font-black" disabled={isLoading}>
+                    {isLoading ? <Loader2 className="animate-spin" /> : "Sign Up & Pay"}
                   </Button>
-                  <Button
-                    asChild
-                    className="relative overflow-hidden bg-white hover:bg-gray-50 text-gray-900 border-2 border-gray-200 hover:border-gray-300 shadow-xl hover:shadow-2xl transition-all duration-300 transform hover:scale-105 font-bold h-14 px-8 group"
-                  >
-                    <a href="https://apps.apple.com" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3">
-                      <svg className="w-7 h-7" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M17.05,20.28C14.75,21.36 13.5,20.5 12,20.5C10.5,20.5 9.25,21.36 6.95,20.28C4.65,19.2 3.5,16.74 3.5,13.5C3.5,10.26 4.65,7.8 6.95,6.72C9.25,5.64 10.5,6.5 12,6.5C13.5,6.5 14.75,5.64 17.05,6.72C19.35,7.8 20.5,10.26 20.5,13.5C20.5,16.74 19.35,19.2 17.05,20.28M12,2C11.5,2 11,2.19 10.59,2.59C10.19,3 10,3.5 10,4C10,4.5 10.19,5 10.59,5.41C11,5.81 11.5,6 12,6C12.5,6 13,5.81 13.41,5.41C13.81,5 14,4.5 14,4C14,3.5 13.81,3 13.41,2.59C13,2.19 12.5,2 12,2Z" />
-                      </svg>
-                      <span className="font-bold">App Store</span>
-                      <ExternalLink className="w-5 h-5 opacity-70" />
-                      <span className="absolute inset-0 bg-gradient-to-r from-transparent via-gray-200/30 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></span>
-                    </a>
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                </form>
+                <p className="text-center mt-6 text-sm text-muted-foreground">
+                  Already have an account?{' '}
+                  <button onClick={() => setCurrentView('login')} className="text-primary font-bold">Login</button>
+                </p>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {/* Ultra-Premium Login View */}

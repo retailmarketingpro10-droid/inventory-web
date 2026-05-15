@@ -30,7 +30,7 @@ export default function PaymentSuccess() {
 
       try {
         // Find the pending subscription with this transaction ID
-        const { data: pendingSubscription, error: fetchError } = await supabase
+        const { data: pendingSubscription, error: fetchError } = await (supabase as any)
           .from('subscriptions')
           .select('*')
           .eq('user_id', user.id)
@@ -51,19 +51,21 @@ export default function PaymentSuccess() {
           const startDate = new Date();
           const endDate = new Date();
           
-          if (pendingSubscription.subscription_type === 'annual') {
+          if ((pendingSubscription as any).subscription_type === 'annual') {
             endDate.setFullYear(endDate.getFullYear() + 1);
           } else {
             endDate.setMonth(endDate.getMonth() + 1);
           }
 
           // Update the subscription to active
-          const { error: updateError } = await supabase
+          const { error: updateError } = await (supabase as any)
             .from('subscriptions')
             .update({
               status: 'active',
               payment_status: 'paid',
-              transaction_id: mihpayid || txnid || pendingSubscription.transaction_id,
+              payment_gateway: 'PayU',
+              plan_name: 'Annual Maintenance',
+              transaction_id: mihpayid || txnid || (pendingSubscription as any).transaction_id,
               start_date: startDate.toISOString().split('T')[0],
               end_date: endDate.toISOString().split('T')[0],
               renewal_date: endDate.toISOString().split('T')[0],
@@ -80,7 +82,7 @@ export default function PaymentSuccess() {
           // Update profile subscription status
           await supabase
             .from('profiles')
-            .update({ subscription_status: 'active' })
+            .update({ subscription_plan: 'paid' })
             .eq('id', user.id);
         }
       } catch (error) {

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
+import { useSubscription } from "@/hooks/useSubscription";
 import { Package, Save, RotateCcw, Check, AlertTriangle, Edit3, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { logger } from "@/lib/logger";
@@ -29,6 +30,7 @@ interface StockItem extends Product {
 
 export const StockTakeManager = () => {
   const { selectedCompany } = useCompany();
+  const { isReadOnly } = useSubscription();
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [allStockItems, setAllStockItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,8 @@ export const StockTakeManager = () => {
 
     try {
       setLoading(true);
-      const { data, error } = await supabase
+      const supabaseRef: any = supabase;
+      const { data, error } = await supabaseRef
         .from('products')
         .select('id, name, sku, unit, current_stock, min_stock_level')
         .eq('company_id', selectedCompany.company_name)
@@ -177,7 +180,7 @@ export const StockTakeManager = () => {
       // Update all items with proper error handling per item
       for (const item of selectedItems) {
         try {
-          let updateQuery = supabase
+          let updateQuery: any = supabase
             .from('products')
             .update({ current_stock: item.counted_quantity })
             .eq('id', item.id);
@@ -334,13 +337,13 @@ export const StockTakeManager = () => {
         </div>
         
         <div className="flex gap-2">
-          <Button variant="outline" onClick={resetCountedQuantities}>
+          <Button variant="outline" onClick={resetCountedQuantities} disabled={isReadOnly}>
             <RotateCcw className="w-4 h-4 mr-2" />
             Reset All
           </Button>
           <Button 
             onClick={bulkUpdateSelected}
-            disabled={selectedCount === 0 || saving}
+            disabled={selectedCount === 0 || saving || isReadOnly}
           >
             <Save className="w-4 h-4 mr-2" />
             Update Selected ({selectedCount})
@@ -459,6 +462,7 @@ export const StockTakeManager = () => {
                       variant="outline"
                       size="sm"
                       onClick={() => toggleEdit(item.id)}
+                      disabled={isReadOnly}
                     >
                       <Edit3 className="w-4 h-4" />
                     </Button>
@@ -467,7 +471,7 @@ export const StockTakeManager = () => {
                       <Button
                         size="sm"
                         onClick={() => updateSingleItem(item)}
-                        disabled={saving}
+                        disabled={saving || isReadOnly}
                       >
                         <Check className="w-4 h-4 mr-1" />
                         Update

@@ -92,7 +92,6 @@ export const POAttachments: React.FC<POAttachmentsProps> = ({ poId }) => {
                   onClick={() => handleImageClick(att)}
                 >
                   {isImage ? (
-                    // eslint-disable-next-line @next/next/no-img-element
                     <img src={url} alt={att.file_name} className="w-full h-28 object-cover rounded hover:opacity-80 transition-opacity" />
                   ) : (
                     <div className="h-28 flex items-center justify-center bg-muted rounded text-sm hover:bg-muted/80 transition-colors">
@@ -129,7 +128,6 @@ export const POAttachments: React.FC<POAttachmentsProps> = ({ poId }) => {
           </DialogHeader>
           <div className="p-6 pt-0 flex justify-center items-center min-h-[400px]">
             {selectedImage && (
-              // eslint-disable-next-line @next/next/no-img-element
               <img 
                 src={selectedImage.public_url || '#'} 
                 alt={selectedImage.file_name}

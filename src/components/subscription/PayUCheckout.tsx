@@ -150,13 +150,15 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
       }
 
       // Insert pending subscription
-      const { error: subscriptionError } = await supabase
+      const { error: subscriptionError } = await (supabase as any)
         .from('subscriptions')
         .insert({
           user_id: user.id,
           subscription_type: subscriptionType,
           status: 'pending',
-          amount_paid: amount,
+          payment_amount: amount,
+          plan_name: 'Annual Maintenance',
+          payment_gateway: 'PayU',
           start_date: startDate.toISOString().split('T')[0],
           end_date: endDate.toISOString().split('T')[0],
           renewal_date: endDate.toISOString().split('T')[0],

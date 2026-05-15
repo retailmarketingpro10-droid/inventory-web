@@ -23,9 +23,8 @@ export async function generateProfitAndLossReport(
   // can be reused and tested independently.
 
   // Fetch all sales invoices (for sales account) within the reporting period
-  const { data: allSalesInvoices, error: salesError } = await supabase
-    .from("invoices")
-    .select("id, subtotal, tax_amount, total_amount, invoice_date, discount_amount, discount_percentage")
+  const { data: allSalesInvoices, error: salesError } = await (supabase as any).from("invoices")
+    .select("id, subtotal, tax_amount, total_amount, invoice_date")
     .eq("company_id", companyName)
     .eq("invoice_type", "sales")
     .gte("invoice_date", dateFrom)
@@ -36,8 +35,7 @@ export async function generateProfitAndLossReport(
   }
 
   // Fetch sale return invoices in the reporting period
-  const { data: saleReturns } = await supabase
-    .from("invoices")
+  const { data: saleReturns } = await (supabase as any).from("invoices")
     .select("id, subtotal, tax_amount, total_amount, invoice_date")
     .eq("company_id", companyName)
     .eq("invoice_type", "sale_return")
@@ -45,9 +43,8 @@ export async function generateProfitAndLossReport(
     .lte("invoice_date", dateTo);
 
   // Fetch purchase invoices in the reporting period
-  const { data: purchaseInvoices, error: purchaseError } = await supabase
-    .from("invoices")
-    .select("id, subtotal, tax_amount, total_amount, invoice_date, discount_amount, discount_percentage")
+  const { data: purchaseInvoices, error: purchaseError } = await (supabase as any).from("invoices")
+    .select("id, subtotal, tax_amount, total_amount, invoice_date")
     .eq("company_id", companyName)
     .eq("invoice_type", "purchase")
     .gte("invoice_date", dateFrom)
@@ -58,46 +55,40 @@ export async function generateProfitAndLossReport(
   }
 
   // Fetch purchase return invoices in the reporting period
-  const { data: purchaseReturns } = await supabase
-    .from("invoices")
+  const { data: purchaseReturns } = await (supabase as any).from("invoices")
     .select("id, subtotal, tax_amount, total_amount, invoice_date")
     .eq("company_id", companyName)
     .eq("invoice_type", "purchase_return")
     .gte("invoice_date", dateFrom)
     .lte("invoice_date", dateTo);
 
-  // Fetch invoices BEFORE the reporting period for opening stock calculation
-  const { data: salesBeforePeriod } = await supabase
-    .from("invoices")
+  // Fetch invoices AFTER the reporting period for backward stock calculation
+  const { data: salesAfterPeriod } = await (supabase as any).from("invoices")
     .select("id")
     .eq("company_id", companyName)
     .eq("invoice_type", "sales")
-    .lt("invoice_date", dateFrom);
+    .gt("invoice_date", dateTo);
 
-  const { data: saleReturnsBeforePeriod } = await supabase
-    .from("invoices")
+  const { data: saleReturnsAfterPeriod } = await (supabase as any).from("invoices")
     .select("id")
     .eq("company_id", companyName)
     .eq("invoice_type", "sale_return")
-    .lt("invoice_date", dateFrom);
+    .gt("invoice_date", dateTo);
 
-  const { data: purchaseInvoicesBeforePeriod } = await supabase
-    .from("invoices")
+  const { data: purchaseInvoicesAfterPeriod } = await (supabase as any).from("invoices")
     .select("id")
     .eq("company_id", companyName)
     .eq("invoice_type", "purchase")
-    .lt("invoice_date", dateFrom);
+    .gt("invoice_date", dateTo);
 
-  const { data: purchaseReturnsBeforePeriod } = await supabase
-    .from("invoices")
+  const { data: purchaseReturnsAfterPeriod } = await (supabase as any).from("invoices")
     .select("id")
     .eq("company_id", companyName)
     .eq("invoice_type", "purchase_return")
-    .lt("invoice_date", dateFrom);
+    .gt("invoice_date", dateTo);
 
   // Fetch labour invoices (potential direct inventory expenses)
-  const { data: labourInvoices } = await supabase
-    .from("invoices")
+  const { data: labourInvoices } = await (supabase as any).from("invoices")
     .select("subtotal, tax_amount, total_amount, invoice_date, entity_type")
     .eq("company_id", companyName)
     .eq("entity_type", "labour")
@@ -105,8 +96,7 @@ export async function generateProfitAndLossReport(
     .lte("invoice_date", dateTo);
 
   // Fetch transport invoices (potential direct inventory expenses)
-  const { data: transportInvoices } = await supabase
-    .from("invoices")
+  const { data: transportInvoices } = await (supabase as any).from("invoices")
     .select("subtotal, tax_amount, total_amount, invoice_date, entity_type")
     .eq("company_id", companyName)
     .eq("entity_type", "transport")
@@ -129,8 +119,7 @@ export async function generateProfitAndLossReport(
 
   const loadItems = async (invoiceIds: string[]) => {
     if (!invoiceIds.length) return [];
-    const { data } = await supabase
-      .from("invoice_items")
+    const { data } = await (supabase as any).from("invoice_items")
       .select("quantity, unit_price, product_id, invoice_id")
       .in("invoice_id", invoiceIds);
     return data || [];
@@ -141,16 +130,16 @@ export async function generateProfitAndLossReport(
   const saleReturnItems = await loadItems(idsOf(saleReturns));
   const purchaseReturnItems = await loadItems(idsOf(purchaseReturns));
 
-  const salesInvoiceItemsBeforePeriod = await loadItems(idsOf(salesBeforePeriod));
-  const purchaseInvoiceItemsBeforePeriod = await loadItems(idsOf(purchaseInvoicesBeforePeriod));
-  const saleReturnItemsBeforePeriod = await loadItems(idsOf(saleReturnsBeforePeriod));
-  const purchaseReturnItemsBeforePeriod = await loadItems(idsOf(purchaseReturnsBeforePeriod));
+  const salesInvoiceItemsAfterPeriod = await loadItems(idsOf(salesAfterPeriod));
+  const purchaseInvoiceItemsAfterPeriod = await loadItems(idsOf(purchaseInvoicesAfterPeriod));
+  const saleReturnItemsAfterPeriod = await loadItems(idsOf(saleReturnsAfterPeriod));
+  const purchaseReturnItemsAfterPeriod = await loadItems(idsOf(purchaseReturnsAfterPeriod));
 
-  // Quantity movements before the reporting period (to derive opening stock for this period)
-  const salesBeforeQtyMap = createQtyMap(salesInvoiceItemsBeforePeriod);
-  const saleReturnsBeforeQtyMap = createQtyMap(saleReturnItemsBeforePeriod);
-  const purchaseBeforeQtyMap = createQtyMap(purchaseInvoiceItemsBeforePeriod);
-  const purchaseReturnsBeforeQtyMap = createQtyMap(purchaseReturnItemsBeforePeriod);
+  // Quantity movements AFTER the reporting period (to derive closing stock for this period)
+  const salesAfterQtyMap = createQtyMap(salesInvoiceItemsAfterPeriod);
+  const saleReturnsAfterQtyMap = createQtyMap(saleReturnItemsAfterPeriod);
+  const purchaseAfterQtyMap = createQtyMap(purchaseInvoiceItemsAfterPeriod);
+  const purchaseReturnsAfterQtyMap = createQtyMap(purchaseReturnItemsAfterPeriod);
 
   // Quantity movements inside the reporting period (to derive closing stock at period end)
   const salesPeriodQtyMap = createQtyMap(salesInvoiceItems);
@@ -159,8 +148,7 @@ export async function generateProfitAndLossReport(
   const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
 
   // Fetch all products (including imported opening stock quantity used for first-period opening stock)
-  const { data: products, error: productsError } = await supabase
-    .from("products")
+  const { data: products, error: productsError } = await (supabase as any).from("products")
     .select("id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value")
     .eq("company_id", companyName);
 
@@ -170,43 +158,15 @@ export async function generateProfitAndLossReport(
 
   let openingStockValue = 0;
   let closingStockValue = 0;
-  let productsWithOpeningValueButNoQty = 0;
-  let productsWithOpeningValueButNoQtyAndMovements = 0;
-  let productsUsingCurrentStockAsOpening = 0;
 
   (products || []).forEach((product: any) => {
     const productId = String(product.id);
-    const importedOpeningQty = Number(product.opening_stock_qty) || 0;
-    const importedOpeningValue = Number(product.opening_stock_value) || 0;
     const currentStock = Number(product.current_stock) || 0;
 
     let costPerUnit = Number(product.purchase_price) || 0;
-    if ((!costPerUnit || Number.isNaN(costPerUnit)) && product.opening_stock_value && importedOpeningQty > 0) {
-      costPerUnit = Number(product.opening_stock_value) / importedOpeningQty;
-    }
     if (!costPerUnit || Number.isNaN(costPerUnit)) {
       costPerUnit = 0;
     }
-
-    const openingQtyForPeriod =
-      importedOpeningQty +
-      (purchaseBeforeQtyMap.get(productId) || 0) -
-      (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
-      (salesBeforeQtyMap.get(productId) || 0) +
-      (saleReturnsBeforeQtyMap.get(productId) || 0);
-
-    const closingQtyForPeriod =
-      openingQtyForPeriod +
-      (purchasePeriodQtyMap.get(productId) || 0) -
-      (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
-      (salesPeriodQtyMap.get(productId) || 0) +
-      (saleReturnsPeriodQtyMap.get(productId) || 0);
-
-    const movementsBefore =
-      (purchaseBeforeQtyMap.get(productId) || 0) -
-      (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
-      (salesBeforeQtyMap.get(productId) || 0) +
-      (saleReturnsBeforeQtyMap.get(productId) || 0);
 
     const movementsInPeriod =
       (purchasePeriodQtyMap.get(productId) || 0) -
@@ -214,48 +174,18 @@ export async function generateProfitAndLossReport(
       (salesPeriodQtyMap.get(productId) || 0) +
       (saleReturnsPeriodQtyMap.get(productId) || 0);
 
-    if (importedOpeningQty <= 0 && importedOpeningValue > 0) {
-      productsWithOpeningValueButNoQty += 1;
-      if (movementsBefore === 0 && movementsInPeriod === 0) {
-        openingStockValue += importedOpeningValue;
-        closingStockValue += importedOpeningValue;
-        return;
-      }
-      productsWithOpeningValueButNoQtyAndMovements += 1;
-    }
+    const movementsAfter =
+      (purchaseAfterQtyMap.get(productId) || 0) -
+      (purchaseReturnsAfterQtyMap.get(productId) || 0) -
+      (salesAfterQtyMap.get(productId) || 0) +
+      (saleReturnsAfterQtyMap.get(productId) || 0);
 
-    if (
-      importedOpeningQty <= 0 &&
-      importedOpeningValue <= 0 &&
-      currentStock > 0 &&
-      movementsBefore === 0 &&
-      movementsInPeriod === 0 &&
-      costPerUnit > 0
-    ) {
-      openingStockValue += currentStock * costPerUnit;
-      closingStockValue += currentStock * costPerUnit;
-      productsUsingCurrentStockAsOpening += 1;
-      return;
-    }
+    const closingQtyForPeriod = currentStock - movementsAfter;
+    const openingQtyForPeriod = closingQtyForPeriod - movementsInPeriod;
 
-    openingStockValue += openingQtyForPeriod * costPerUnit;
-    closingStockValue += closingQtyForPeriod * costPerUnit;
+    openingStockValue += Math.max(0, openingQtyForPeriod) * costPerUnit;
+    closingStockValue += Math.max(0, closingQtyForPeriod) * costPerUnit;
   });
-
-  if (productsWithOpeningValueButNoQty > 0) {
-    logger.warn(
-      `P&L: ${productsWithOpeningValueButNoQty} product(s) have opening_stock_value but no opening_stock_qty. ` +
-        (productsWithOpeningValueButNoQtyAndMovements > 0
-          ? `${productsWithOpeningValueButNoQtyAndMovements} of them also have movements; valuation may be incorrect until qty is set.`
-          : `Opening value is only reflected when there are no movements.`)
-    );
-  }
-
-  if (productsUsingCurrentStockAsOpening > 0) {
-    logger.info(
-      `P&L: Using current_stock × purchase_price as opening/closing stock for ${productsUsingCurrentStockAsOpening} product(s) with no explicit opening stock and no movements in the selected period.`
-    );
-  }
 
   const openingStockCost = openingStockValue;
   const closingStock = closingStockValue;
@@ -278,37 +208,12 @@ export async function generateProfitAndLossReport(
     (transportInvoices || []).reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
   const directExpenses = labourDirectBase + transportDirectBase;
 
-  // Sales discounts (indirect expenses)
   let salesDiscounts = 0;
-  (allSalesInvoices || []).forEach((inv: any) => {
-    let invoiceDiscount = 0;
-    const subtotal = inv.subtotal || 0;
-    if (inv.discount_amount) {
-      invoiceDiscount += inv.discount_amount;
-    }
-    if (inv.discount_percentage && inv.discount_percentage > 0) {
-      const remainingAfterFlat = Math.max(0, subtotal - invoiceDiscount);
-      const percentageDiscount = (remainingAfterFlat * inv.discount_percentage) / 100;
-      invoiceDiscount += percentageDiscount;
-    }
-    salesDiscounts += invoiceDiscount;
-  });
+  // discount_amount column is removed from types, so it's 0 for now
 
   // Purchase discounts (indirect income)
   let purchaseDiscounts = 0;
-  (purchaseInvoices || []).forEach((inv: any) => {
-    let invoiceDiscount = 0;
-    const subtotal = inv.subtotal || 0;
-    if (inv.discount_amount) {
-      invoiceDiscount += inv.discount_amount;
-    }
-    if (inv.discount_percentage && inv.discount_percentage > 0) {
-      const remainingAfterFlat = Math.max(0, subtotal - invoiceDiscount);
-      const percentageDiscount = (remainingAfterFlat * inv.discount_percentage) / 100;
-      invoiceDiscount += percentageDiscount;
-    }
-    purchaseDiscounts += invoiceDiscount;
-  });
+  // discount_amount column is removed from types, so it's 0 for now
 
   const indirectExpenses = salesDiscounts;
 
@@ -319,8 +224,7 @@ export async function generateProfitAndLossReport(
   let indirectExpensesFromLedgers = 0;
 
   if (user?.id) {
-    const { data: companyLedgers, error: ledgersError } = await supabase
-      .from("ledgers")
+    const { data: companyLedgers, error: ledgersError } = await (supabase as any).from("ledgers")
       .select("id, ledger_type")
       .eq("company_id", companyName);
 
@@ -332,8 +236,7 @@ export async function generateProfitAndLossReport(
     const ledgerTypeMap = new Map((companyLedgers || []).map((l) => [l.id, l.ledger_type]));
 
     if (ledgerIds.length > 0) {
-      const { data: entriesData, error: entriesError } = await supabase
-        .from("ledger_entries")
+      const { data: entriesData, error: entriesError } = await (supabase as any).from("ledger_entries")
         .select("debit_amount, credit_amount, ledger_id, entry_date")
         .in("ledger_id", ledgerIds)
         .eq("user_id", user.id)

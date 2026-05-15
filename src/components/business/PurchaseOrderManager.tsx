@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
+import { useSubscription } from "@/hooks/useSubscription";
 import { Plus, ShoppingCart, Download, Edit, Trash2, Eye, Package } from "lucide-react";
 import { formatIndianCurrency, calculateGST } from "@/utils/indianBusiness";
 import { downloadReportAsCSV } from "@/utils/pdfGenerator";
@@ -46,6 +47,7 @@ interface PurchaseOrder {
     phone?: string;
     email?: string;
     gstin?: string;
+    state?: string;
   };
   items_summary?: {
     total_items: number;
@@ -56,6 +58,7 @@ interface PurchaseOrder {
       unit_price: number;
       line_total: number;
       received_quantity: number;
+      gst_rate?: number;
     }>;
   };
 }
@@ -74,6 +77,7 @@ interface PurchaseOrderItem {
 interface Supplier {
   id: string;
   company_name: string;
+  state?: string;
 }
 
 interface Product {
@@ -90,6 +94,7 @@ interface Product {
 
 export const PurchaseOrderManager = () => {
   const { selectedCompany } = useCompany();
+  const { isReadOnly } = useSubscription();
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [poSearch, setPoSearch] = useState("");
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -145,7 +150,7 @@ export const PurchaseOrderManager = () => {
 
   const fetchPurchaseOrders = async () => {
     try {
-      let query = supabase
+      let query: any = (supabase as any)
         .from('purchase_orders')
         .select(`
           *,
@@ -168,10 +173,10 @@ export const PurchaseOrderManager = () => {
 
       // Filter by company if a company is selected
       if (selectedCompany?.company_name) {
-        query = query.eq('company_id', selectedCompany.company_name);
+        query = (query as any).eq('company_id', selectedCompany.company_name);
       }
 
-      const { data, error } = await query.order('created_at', { ascending: false });
+      const { data, error } = await (query as any).order('created_at', { ascending: false });
 
       if (error) throw error;
       
@@ -220,7 +225,7 @@ export const PurchaseOrderManager = () => {
 
       // Build query - explicitly select only id and company_name from suppliers table
       // Try to fetch suppliers with user_id matching, or with null user_id (legacy)
-      let query = supabase
+      const query = (supabase as any)
         .from('suppliers')
         .select('id, company_name')
         .or(`user_id.eq.${user.id},user_id.is.null`)
@@ -234,14 +239,14 @@ export const PurchaseOrderManager = () => {
         if (allError) {
           logger.error('Error fetching suppliers:', allError);
           // If OR query fails, try separate queries
-          const { data: userSuppliers } = await supabase
+          const { data: userSuppliers } = await (supabase as any)
             .from('suppliers')
             .select('id, company_name, company_id')
             .eq('user_id', user.id)
             .not('company_name', 'is', null)
             .order('company_name');
           
-          const { data: legacySuppliers } = await supabase
+          const { data: legacySuppliers } = await (supabase as any)
             .from('suppliers')
             .select('id, company_name, company_id')
             .is('user_id', null)
@@ -259,7 +264,7 @@ export const PurchaseOrderManager = () => {
         }
         
         // Get company_id for filtering
-        const { data: suppliersWithCompany } = await supabase
+        const { data: suppliersWithCompany } = await (supabase as any)
           .from('suppliers')
           .select('id, company_name, company_id')
           .or(`user_id.eq.${user.id},user_id.is.null`)
@@ -282,14 +287,14 @@ export const PurchaseOrderManager = () => {
       if (error) {
         logger.error('Failed to load suppliers - error:', error);
         // Fallback: try separate queries
-        const { data: userSuppliers } = await supabase
+        const { data: userSuppliers } = await (supabase as any)
           .from('suppliers')
           .select('id, company_name')
           .eq('user_id', user.id)
           .not('company_name', 'is', null)
           .order('company_name');
         
-        const { data: legacySuppliers } = await supabase
+        const { data: legacySuppliers } = await (supabase as any)
           .from('suppliers')
           .select('id, company_name')
           .is('user_id', null)
@@ -328,7 +333,8 @@ export const PurchaseOrderManager = () => {
 
         if (profileData?.business_entities && Array.isArray(profileData.business_entities)) {
           // Find the selected company's state
-          const businessEntity = profileData.business_entities.find(
+          const entities = profileData.business_entities as any[];
+          const businessEntity = entities.find(
             (entity: any) => entity.company_name === selectedCompany.company_name
           );
           
@@ -359,7 +365,7 @@ export const PurchaseOrderManager = () => {
 
       // Always filter by user_id to ensure we only get products (not suppliers)
       // Explicitly select only from products table with specific fields including supplier_id
-      let query = supabase
+      let query: any = (supabase as any)
         .from('products')
         .select('id, name, description, hsn_code, purchase_price, gst_rate, current_stock, min_stock_level, supplier_id')
         .eq('user_id', user.id)
@@ -405,7 +411,7 @@ export const PurchaseOrderManager = () => {
       
       console.log('Loaded products:', validProducts.length, 'products (filtered from', data?.length || 0, 'total)');
       if (data && data.length > validProducts.length) {
-        logger.warn('Filtered out', data.length - validProducts.length, 'non-product items from products list');
+        logger.warn(`Filtered out ${data.length - validProducts.length} non-product items from products list`);
       }
       setProducts(validProducts);
     } catch (error) {
@@ -975,7 +981,7 @@ export const PurchaseOrderManager = () => {
           
           <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button onClick={() => resetForm()}>
+            <Button onClick={() => resetForm()} disabled={isReadOnly}>
               <Plus className="w-4 h-4 mr-2" />
               Create Purchase Order
             </Button>
@@ -1012,7 +1018,7 @@ export const PurchaseOrderManager = () => {
                           </div>
                         ) : (
                           suppliers
-                            .filter(s => s && s.id && s.company_name && !s.name) // Extra safety: ensure it's a supplier, not a product
+                            .filter(s => s && s.id && s.company_name && !(s as any).name) // Extra safety: ensure it's a supplier, not a product
                             .map((supplier) => (
                               <SelectItem key={supplier.id} value={supplier.id}>
                                 {supplier.company_name}
@@ -1107,7 +1113,7 @@ export const PurchaseOrderManager = () => {
                                 // Strict filtering: ensure it's a product, not a supplier
                                 if (!p || !p.id || !p.name) return false;
                                 // Exclude if it has supplier-specific fields (this means it's from suppliers table)
-                                if (p.company_name || p.contact_person || p.email || p.phone) return false;
+                                if ((p as any).company_name || (p as any).contact_person || (p as any).email || (p as any).phone) return false;
                                 // Exclude generic/test product names like "Product 141", "Product 142", etc.
                                 const productName = p.name.trim();
                                 const genericProductPattern = /^product\s+\d+$/i;
@@ -1327,6 +1333,7 @@ export const PurchaseOrderManager = () => {
                       size="sm" 
                       onClick={() => handleDelete(po.id)}
                       className="text-destructive hover:text-destructive"
+                      disabled={isReadOnly}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>
@@ -1478,7 +1485,11 @@ export const PurchaseOrderManager = () => {
 
               <div className="flex justify-end gap-2">
                 {selectedPO.status !== 'received' && (
-                  <Button onClick={() => openReceivingModal(selectedPO)} className="bg-primary text-primary-foreground hover:bg-primary/90">
+                  <Button 
+                    onClick={() => openReceivingModal(selectedPO)} 
+                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                    disabled={isReadOnly}
+                  >
                     <Package className="w-4 h-4 mr-2" />
                     Update Receipt
                   </Button>

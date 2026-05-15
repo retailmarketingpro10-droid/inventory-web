@@ -7,15 +7,17 @@ export interface SubscriptionStatus {
   isActive: boolean;
   isExpired: boolean;
   isTrial: boolean;
+  isReadOnly: boolean; // TRUE if expired or payment pending
   daysRemaining: number;
   subscription: {
     id: string;
     subscription_type: string;
-    status: string;
+    subscription_status: string; // Renamed status
     start_date: string;
     end_date: string;
-    amount_paid: number;
+    payment_amount: number;
     payment_status: string;
+    plan_name: string;
   } | null;
   loading: boolean;
 }
@@ -26,6 +28,7 @@ export const useSubscription = () => {
     isActive: false,
     isExpired: false,
     isTrial: false,
+    isReadOnly: false,
     daysRemaining: 0,
     subscription: null,
     loading: true
@@ -47,27 +50,30 @@ export const useSubscription = () => {
 
     try {
       // First, run the expiry check function to update expired subscriptions
-      await supabase.rpc('check_subscription_expiry');
+      await (supabase as any).rpc('check_subscription_expiry');
 
       // Get user's active subscription (must be active AND paid)
-      // Pending subscriptions should NOT grant access
-      const { data: subscriptions, error } = await supabase
+      // Call the new RPC for unified status
+      const { data: statusJson, error: statusError } = await (supabase as any)
+        .rpc('get_subscription_status', { user_id_uuid: user.id });
+
+      // Also get full details for the UI
+      const { data: subscriptions, error } = await (supabase as any)
         .from('subscriptions')
         .select('*')
         .eq('user_id', user.id)
-        .eq('status', 'active')
-        .eq('payment_status', 'paid')  // Only show paid subscriptions as active
         .order('end_date', { ascending: false })
         .limit(1);
       
       const subscription = subscriptions && subscriptions.length > 0 ? subscriptions[0] : null;
 
-      if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      if (error) {
         logger.error('Error fetching subscription:', error);
         setSubscriptionStatus({
           isActive: false,
           isExpired: true,
           isTrial: false,
+          isReadOnly: true,
           daysRemaining: 0,
           subscription: null,
           loading: false
@@ -76,90 +82,50 @@ export const useSubscription = () => {
       }
 
       if (!subscription) {
-        // No active subscription found - check if user is still in 11-month trial period
-        // Get user creation date from profiles or auth
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('created_at')
-          .eq('id', user.id)
-          .single();
-        
-        const userCreatedAt = profile?.created_at || user.created_at;
-        
-        if (userCreatedAt) {
-          // Calculate trial end date (11 months from account creation)
-          const accountCreatedDate = new Date(userCreatedAt);
-          const trialEndDate = new Date(accountCreatedDate);
-          trialEndDate.setMonth(trialEndDate.getMonth() + 11);
-          
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          trialEndDate.setHours(0, 0, 0, 0);
-          
-          const isTrialExpired = trialEndDate < today;
-          const daysRemaining = Math.ceil((trialEndDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-          
-          setSubscriptionStatus({
-            isActive: !isTrialExpired, // Active if trial hasn't expired
-            isExpired: isTrialExpired,
-            isTrial: true,
-            daysRemaining: isTrialExpired ? 0 : daysRemaining,
-            subscription: null,
-            loading: false
-          });
-        } else {
-          // No account creation date found - treat as expired
-          setSubscriptionStatus({
-            isActive: false,
-            isExpired: true,
-            isTrial: false,
-            daysRemaining: 0,
-            subscription: null,
-            loading: false
-          });
-        }
+        // No subscription record found - block access
+        setSubscriptionStatus({
+          isActive: false,
+          isExpired: false,
+          isTrial: false,
+          isReadOnly: true,
+          daysRemaining: 0,
+          subscription: null,
+          loading: false
+        });
         return;
       }
 
       // Check if subscription is expired
-      // Parse end_date as a date string (YYYY-MM-DD) and create date at start of day
-      const endDateStr = subscription.end_date.split('T')[0]; // Get just the date part
-      const endDate = new Date(endDateStr + 'T23:59:59'); // Set to end of the end date
+      const endDateStr = (subscription as any).end_date.split('T')[0];
+      const endDate = new Date(endDateStr + 'T23:59:59');
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
-      // Subscription expires if end date has passed (end date is before today)
-      // If end date is today, it's still valid
       const isExpired = endDate < today;
-      const daysRemaining = Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-      const isTrial = subscription.subscription_type === 'trial';
-      // For trial subscriptions, allow access even if payment_status is not 'paid' since it's free
-      const isActive = !isExpired && subscription.status === 'active' && 
-        (subscription.payment_status === 'paid' || subscription.subscription_type === 'trial');
+      const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+      const isTrial = (subscription as any).subscription_type === 'trial';
       
-      console.log('Subscription check:', {
-        end_date: subscription.end_date,
-        endDateStr,
-        endDate: endDate.toISOString(),
-        today: today.toISOString(),
-        isExpired,
-        daysRemaining,
-        isActive
-      });
+      // Active if it's paid AND not expired
+      const isActive = !isExpired && (subscription as any).payment_status === 'paid';
+      
+      // READ-ONLY if expired OR pay status is not 'paid'
+      const isReadOnly = isExpired || (subscription as any).payment_status !== 'paid';
 
       setSubscriptionStatus({
         isActive,
         isExpired,
         isTrial,
-        daysRemaining: isExpired ? 0 : daysRemaining,
+        isReadOnly,
+        daysRemaining,
         subscription: {
-          id: subscription.id,
-          subscription_type: subscription.subscription_type,
-          status: subscription.status,
-          start_date: subscription.start_date,
-          end_date: subscription.end_date,
-          amount_paid: subscription.amount_paid,
-          payment_status: subscription.payment_status
+          id: (subscription as any).id,
+          subscription_type: (subscription as any).subscription_type,
+          subscription_status: (subscription as any).subscription_status,
+          start_date: (subscription as any).start_date,
+          end_date: (subscription as any).end_date,
+          payment_amount: (subscription as any).payment_amount,
+          payment_status: (subscription as any).payment_status,
+          plan_name: (subscription as any).plan_name || 'Annual'
         },
         loading: false
       });
@@ -169,6 +135,7 @@ export const useSubscription = () => {
         isActive: false,
         isExpired: true,
         isTrial: false,
+        isReadOnly: true,
         daysRemaining: 0,
         subscription: null,
         loading: false

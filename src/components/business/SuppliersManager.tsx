@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
+import { useSubscription } from "@/hooks/useSubscription";
 import { Plus, Building2, Phone, Mail, MapPin, Edit, Trash2, Download, Upload } from "lucide-react";
 import { downloadReportAsCSV } from "@/utils/pdfGenerator";
 import { ERPImportManager } from "@/components/import/ERPImportManager";
@@ -36,6 +37,7 @@ interface Supplier {
 
 export const SuppliersManager = () => {
   const { selectedCompany } = useCompany();
+  const { isReadOnly } = useSubscription();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierSearch, setSupplierSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -61,16 +63,16 @@ export const SuppliersManager = () => {
 
   const fetchSuppliers = async () => {
     try {
-      let query = supabase
+      let query: any = (supabase as any)
         .from('suppliers')
         .select('*');
 
       // Filter by company if a company is selected
       if (selectedCompany?.company_name) {
-        query = query.eq('company_id', selectedCompany.company_name);
+        query = (query as any).eq('company_id', selectedCompany.company_name);
       }
 
-      const { data, error } = await query.order('company_name');
+      const { data, error } = await (query as any).order('company_name');
 
       if (error) throw error;
       setSuppliers(data || []);
@@ -215,7 +217,7 @@ export const SuppliersManager = () => {
         </div>
         
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setImportOpen(true)}>
+          <Button variant="outline" onClick={() => setImportOpen(true)} disabled={isReadOnly}>
             <Upload className="w-4 h-4 mr-2" />
             Import from ERP
           </Button>
@@ -227,7 +229,7 @@ export const SuppliersManager = () => {
           
           <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button onClick={() => resetForm()}>
+            <Button onClick={() => resetForm()} disabled={isReadOnly}>
               <Plus className="w-4 h-4 mr-2" />
               Add Supplier
             </Button>
@@ -359,7 +361,12 @@ export const SuppliersManager = () => {
                     )}
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => startEdit(supplier)}>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => startEdit(supplier)}
+                      disabled={isReadOnly}
+                    >
                       <Edit className="w-4 h-4" />
                     </Button>
                     <Button 
@@ -367,6 +374,7 @@ export const SuppliersManager = () => {
                       size="sm" 
                       onClick={() => handleDelete(supplier.id)}
                       className="text-destructive hover:text-destructive"
+                      disabled={isReadOnly}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>

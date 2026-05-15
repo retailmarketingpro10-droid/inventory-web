@@ -37,6 +37,7 @@ import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
 import { GSTSyncService } from '@/services/gstSyncService';
 import { getCurrentFinancialYear } from '@/utils/indianBusiness';
 import { getInventoryAsOf } from '@/services/inventoryValuationService';
+import { getFinancialYearForDate } from '@/utils/indianBusiness';
 
 interface ReportRow {
   subcategory: string;
@@ -60,6 +61,21 @@ interface ReportRow {
   payment_method?: string;
   record_type?: string;
   notes?: string;
+  
+  // Added from TS fix
+  total_amount?: number;
+  expiration_date?: string;
+  opening_balance?: number;
+  debits?: number;
+  credits?: number;
+  closing_balance?: number;
+  closing_debit?: number;
+  closing_credit?: number;
+  taxable_amount?: number;
+  total_paid?: number;
+  amount_due?: number;
+  days_overdue?: number;
+  days_until_due?: number;
 }
 
 interface ReportSummary {
@@ -77,10 +93,32 @@ interface ReportSummary {
   indirectExpenses?: number;
   indirectIncome?: number;
   salesDiscounts?: number;
+  // Added from TS fix
+  directExpenses?: number;
+  totalTax?: number;
+  totalReturnTax?: number;
+  netPurchaseTax?: number;
+  legacyEntries?: number;
+  inputCGST?: number;
+  inputSGST?: number;
+  inputIGST?: number;
+  outputCGST?: number;
+  outputSGST?: number;
+  outputIGST?: number;
+  netCGST?: number;
+  netSGST?: number;
+  netIGST?: number;
+  valuationMode?: string;
+  periodCredits?: number;
+  totalAssets?: number;
+  totalLiabilities?: number;
+  totalEquity?: number;
+  retainedEarnings?: number;
 }
 
 const REPORT_TYPES = [
   { id: 'profit-loss', name: 'Profit & Loss Statement', icon: <TrendingUp className="h-4 w-4" /> },
+  { id: 'balance-sheet', name: 'Balance Sheet', icon: <TrendingUp className="h-4 w-4" /> },
   { id: 'trial-balance', name: 'Trial Balance', icon: <FileText className="h-4 w-4" /> },
   { id: 'sales-report', name: 'Sales Report', icon: <BarChart3 className="h-4 w-4" /> },
   { id: 'purchase-report', name: 'Purchase Report', icon: <FileText className="h-4 w-4" /> },
@@ -220,9 +258,8 @@ export const ReportsManager: React.FC = () => {
       switch (selectedReport) {
         case 'profit-loss': {
           // Fetch all sales invoices (for sales account) within the reporting period
-          const { data: allSalesInvoices, error: salesError } = await supabase
-            .from('invoices')
-            .select('id, subtotal, tax_amount, total_amount, invoice_date, discount_amount')
+          const { data: allSalesInvoices, error: salesError } = await (supabase as any).from('invoices')
+            .select('id, subtotal, tax_amount, total_amount, invoice_date')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'sales')
             .gte('invoice_date', dateFrom)
@@ -233,8 +270,7 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Fetch sale return invoices in the reporting period
-          const { data: saleReturns } = await supabase
-            .from('invoices')
+          const { data: saleReturns } = await (supabase as any).from('invoices')
             .select('id, subtotal, tax_amount, total_amount, invoice_date')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'sale_return')
@@ -242,9 +278,8 @@ export const ReportsManager: React.FC = () => {
             .lte('invoice_date', dateTo);
 
           // Fetch purchase invoices in the reporting period
-          const { data: purchaseInvoices, error: purchaseError } = await supabase
-            .from('invoices')
-            .select('id, subtotal, tax_amount, total_amount, invoice_date, discount_amount')
+          const { data: purchaseInvoices, error: purchaseError } = await (supabase as any).from('invoices')
+            .select('id, subtotal, tax_amount, total_amount, invoice_date')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase')
             .gte('invoice_date', dateFrom)
@@ -255,46 +290,40 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Fetch purchase return invoices in the reporting period
-          const { data: purchaseReturns } = await supabase
-            .from('invoices')
+          const { data: purchaseReturns } = await (supabase as any).from('invoices')
             .select('id, subtotal, tax_amount, total_amount, invoice_date')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase_return')
             .gte('invoice_date', dateFrom)
             .lte('invoice_date', dateTo);
 
-          // Fetch invoices BEFORE the reporting period for opening stock calculation
-          const { data: salesBeforePeriod } = await supabase
-            .from('invoices')
+          // Fetch invoices AFTER the reporting period for backwards stock calculation
+          const { data: salesAfterPeriod } = await (supabase as any).from('invoices')
             .select('id')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'sales')
-            .lt('invoice_date', dateFrom);
+            .gt('invoice_date', dateTo);
 
-          const { data: saleReturnsBeforePeriod } = await supabase
-            .from('invoices')
+          const { data: saleReturnsAfterPeriod } = await (supabase as any).from('invoices')
             .select('id')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'sale_return')
-            .lt('invoice_date', dateFrom);
+            .gt('invoice_date', dateTo);
 
-          const { data: purchaseInvoicesBeforePeriod } = await supabase
-            .from('invoices')
+          const { data: purchaseInvoicesAfterPeriod } = await (supabase as any).from('invoices')
             .select('id')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase')
-            .lt('invoice_date', dateFrom);
+            .gt('invoice_date', dateTo);
 
-          const { data: purchaseReturnsBeforePeriod } = await supabase
-            .from('invoices')
+          const { data: purchaseReturnsAfterPeriod } = await (supabase as any).from('invoices')
             .select('id')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase_return')
-            .lt('invoice_date', dateFrom);
+            .gt('invoice_date', dateTo);
 
           // Fetch labour invoices (potential direct inventory expenses)
-          const { data: labourInvoices } = await supabase
-            .from('invoices')
+          const { data: labourInvoices } = await (supabase as any).from('invoices')
             .select('subtotal, tax_amount, total_amount, invoice_date, entity_type')
             .eq('company_id', selectedCompany.company_name)
             .eq('entity_type', 'labour')
@@ -302,8 +331,7 @@ export const ReportsManager: React.FC = () => {
             .lte('invoice_date', dateTo);
 
           // Fetch transport invoices (potential direct inventory expenses)
-          const { data: transportInvoices } = await supabase
-            .from('invoices')
+          const { data: transportInvoices } = await (supabase as any).from('invoices')
             .select('subtotal, tax_amount, total_amount, invoice_date, entity_type')
             .eq('company_id', selectedCompany.company_name)
             .eq('entity_type', 'transport')
@@ -316,8 +344,7 @@ export const ReportsManager: React.FC = () => {
           // Fetch sales invoice items to calculate quantity sold for closing stock (period only)
           let salesInvoiceItems: any[] = [];
           if (salesInvoiceIds.length > 0) {
-            const { data: itemsData } = await supabase
-              .from('invoice_items')
+            const { data: itemsData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
               .in('invoice_id', salesInvoiceIds);
             salesInvoiceItems = itemsData || [];
@@ -327,8 +354,7 @@ export const ReportsManager: React.FC = () => {
           let purchaseInvoiceItems: any[] = [];
           const purchaseInvoiceIds = (purchaseInvoices || []).map(inv => inv.id);
           if (purchaseInvoiceIds.length > 0) {
-            const { data: purchaseItemsData } = await supabase
-              .from('invoice_items')
+            const { data: purchaseItemsData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
               .in('invoice_id', purchaseInvoiceIds);
             purchaseInvoiceItems = purchaseItemsData || [];
@@ -338,8 +364,7 @@ export const ReportsManager: React.FC = () => {
           let saleReturnItems: any[] = [];
           const saleReturnIds = (saleReturns || []).map(inv => inv.id);
           if (saleReturnIds.length > 0) {
-            const { data: returnItemsData } = await supabase
-              .from('invoice_items')
+            const { data: returnItemsData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
               .in('invoice_id', saleReturnIds);
             saleReturnItems = returnItemsData || [];
@@ -349,52 +374,47 @@ export const ReportsManager: React.FC = () => {
           let purchaseReturnItems: any[] = [];
           const purchaseReturnIds = (purchaseReturns || []).map(inv => inv.id);
           if (purchaseReturnIds.length > 0) {
-            const { data: purchaseReturnItemsData } = await supabase
-              .from('invoice_items')
+            const { data: purchaseReturnItemsData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
               .in('invoice_id', purchaseReturnIds);
             purchaseReturnItems = purchaseReturnItemsData || [];
           }
 
-          // Fetch items BEFORE the reporting period for opening stock calculation
-          let salesInvoiceItemsBeforePeriod: any[] = [];
-          const salesBeforeIds = (salesBeforePeriod || []).map(inv => inv.id);
-          if (salesBeforeIds.length > 0) {
-            const { data: itemsBeforeData } = await supabase
-              .from('invoice_items')
+          // Fetch items AFTER the reporting period
+          let salesInvoiceItemsAfterPeriod: any[] = [];
+          const salesAfterIds = (salesAfterPeriod || []).map(inv => inv.id);
+          if (salesAfterIds.length > 0) {
+            const { data: itemsBeforeData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', salesBeforeIds);
-            salesInvoiceItemsBeforePeriod = itemsBeforeData || [];
+              .in('invoice_id', salesAfterIds);
+            salesInvoiceItemsAfterPeriod = itemsBeforeData || [];
           }
 
-          let saleReturnItemsBeforePeriod: any[] = [];
-          const saleReturnsBeforeIds = (saleReturnsBeforePeriod || []).map(inv => inv.id);
-          if (saleReturnsBeforeIds.length > 0) {
-            const { data: returnItemsBeforeData } = await supabase
-              .from('invoice_items')
+          let saleReturnItemsAfterPeriod: any[] = [];
+          const saleReturnsAfterIds = (saleReturnsAfterPeriod || []).map(inv => inv.id);
+          if (saleReturnsAfterIds.length > 0) {
+            const { data: returnItemsBeforeData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', saleReturnsBeforeIds);
-            saleReturnItemsBeforePeriod = returnItemsBeforeData || [];
+              .in('invoice_id', saleReturnsAfterIds);
+            saleReturnItemsAfterPeriod = returnItemsBeforeData || [];
           }
 
-          let purchaseInvoiceItemsBeforePeriod: any[] = [];
-          const purchaseBeforeIds = (purchaseInvoicesBeforePeriod || []).map(inv => inv.id);
-          if (purchaseBeforeIds.length > 0) {
-            const { data: purchaseItemsBeforeData } = await supabase
-              .from('invoice_items')
+          let purchaseInvoiceItemsAfterPeriod: any[] = [];
+          const purchaseAfterIds = (purchaseInvoicesAfterPeriod || []).map(inv => inv.id);
+          if (purchaseAfterIds.length > 0) {
+            const { data: purchaseItemsBeforeData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', purchaseBeforeIds);
-            purchaseInvoiceItemsBeforePeriod = purchaseItemsBeforeData || [];
+              .in('invoice_id', purchaseAfterIds);
+            purchaseInvoiceItemsAfterPeriod = purchaseItemsBeforeData || [];
           }
 
-          let purchaseReturnItemsBeforePeriod: any[] = [];
-          const purchaseReturnsBeforeIds = (purchaseReturnsBeforePeriod || []).map(inv => inv.id);
-          if (purchaseReturnsBeforeIds.length > 0) {
-            const { data: purchaseReturnItemsBeforeData } = await supabase
-              .from('invoice_items')
+          let purchaseReturnItemsAfterPeriod: any[] = [];
+          const purchaseReturnsAfterIds = (purchaseReturnsAfterPeriod || []).map(inv => inv.id);
+          if (purchaseReturnsAfterIds.length > 0) {
+            const { data: purchaseReturnItemsBeforeData } = await (supabase as any).from('invoice_items')
               .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', purchaseReturnsBeforeIds);
-            purchaseReturnItemsBeforePeriod = purchaseReturnItemsBeforeData || [];
+              .in('invoice_id', purchaseReturnsAfterIds);
+            purchaseReturnItemsAfterPeriod = purchaseReturnItemsBeforeData || [];
           }
 
           // Helper to aggregate quantities per product
@@ -408,11 +428,11 @@ export const ReportsManager: React.FC = () => {
             return map;
           };
 
-          // Quantity movements before the reporting period (to derive opening stock for this period)
-          const salesBeforeQtyMap = createQtyMap(salesInvoiceItemsBeforePeriod);
-          const saleReturnsBeforeQtyMap = createQtyMap(saleReturnItemsBeforePeriod);
-          const purchaseBeforeQtyMap = createQtyMap(purchaseInvoiceItemsBeforePeriod);
-          const purchaseReturnsBeforeQtyMap = createQtyMap(purchaseReturnItemsBeforePeriod);
+          // Quantity movements AFTER the reporting period (to derive closing stock)
+          const salesAfterQtyMap = createQtyMap(salesInvoiceItemsAfterPeriod);
+          const saleReturnsAfterQtyMap = createQtyMap(saleReturnItemsAfterPeriod);
+          const purchaseAfterQtyMap = createQtyMap(purchaseInvoiceItemsAfterPeriod);
+          const purchaseReturnsAfterQtyMap = createQtyMap(purchaseReturnItemsAfterPeriod);
 
           // Quantity movements inside the reporting period (to derive closing stock at period end)
           const salesPeriodQtyMap = createQtyMap(salesInvoiceItems);
@@ -421,7 +441,7 @@ export const ReportsManager: React.FC = () => {
           const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
 
           // Fetch all products (including imported opening stock quantity used for first-period opening stock)
-          let { data: products, error: productsError } = await supabase
+          let { data: products, error: productsError } = await (supabase as any)
             .from('products')
             .select('id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value')
             .eq('company_id', selectedCompany.company_name);
@@ -430,151 +450,55 @@ export const ReportsManager: React.FC = () => {
             logger.error('Error fetching products for opening/closing stock:', productsError);
           }
 
-          // Fallback: if no products are tied to this company_id, try all products
-          if (!products || products.length === 0) {
-            const { data: fallback, error: fallbackError } = await supabase
-              .from('products')
-              .select('id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value');
-
-            if (fallbackError) {
-              logger.error('Error fetching fallback products for opening/closing stock:', fallbackError);
-            } else {
-              products = fallback || [];
-            }
+          if (productsError) {
+            logger.error('Error fetching products for opening/closing stock:', productsError);
           }
 
-          // Calculate Opening and Closing Stock based on product master data plus
-          // actual invoice movements, so that stock is period-correct.
-          //
-          // Opening Stock:
-          //   - Start from imported opening_stock_qty (from Tally/ERP import) for each product.
-          //   - Adjust by all purchases, purchase returns, sales, and sale returns
-          //     BEFORE the reporting period to get quantity at dateFrom.
-          //   - Value it at base purchase cost (purchase_price when available, otherwise
-          //     derive from opening_stock_value / opening_stock_qty).
-          //
-          // Closing Stock:
-          //   - Take the period opening quantity and apply movements INSIDE the period
-          //     (purchases, purchase returns, sales, sale returns) to get quantity at dateTo.
-          //   - Value it at the same base purchase cost.
-          //
-          // This matches the requirement: Opening Stock and Closing Stock should reflect
-          // total inventory cost (without GST), regardless of whether it came from
-          // bulk upload or manual entry, and must not use selling price or \"live\"
-          // current_stock outside the report period.
+          // Calculate Opening and Closing Stock by rolling back from current_stock
+          // using movements inside and after the reporting period.
           let openingStockValue = 0;
           let closingStockValue = 0;
-          let productsWithOpeningValueButNoQty = 0;
-          let productsWithOpeningValueButNoQtyAndMovements = 0;
-          let productsUsingCurrentStockAsOpening = 0;
 
           (products || []).forEach((product: any) => {
             const productId = String(product.id);
-            const importedOpeningQty = Number(product.opening_stock_qty) || 0;
-            const importedOpeningValue = Number(product.opening_stock_value) || 0;
             const currentStock = Number(product.current_stock) || 0;
 
             // Base purchase cost per unit
             let costPerUnit = Number(product.purchase_price) || 0;
 
-            // If purchase_price is missing but we have an imported opening stock value,
-            // derive an effective base cost from it.
-            if ((!costPerUnit || Number.isNaN(costPerUnit)) &&
-                product.opening_stock_value &&
-                importedOpeningQty > 0) {
-              costPerUnit = Number(product.opening_stock_value) / importedOpeningQty;
-            }
-
             if (!costPerUnit || Number.isNaN(costPerUnit)) {
               costPerUnit = 0;
             }
 
-            // Derive quantity at the start of the period (opening qty for this report)
-            const openingQtyForPeriod =
-              importedOpeningQty +
-              (purchaseBeforeQtyMap.get(productId) || 0) -
-              (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
-              (salesBeforeQtyMap.get(productId) || 0) +
-              (saleReturnsBeforeQtyMap.get(productId) || 0);
-
-            // Derive quantity at the end of the period (closing qty for this report)
-            const closingQtyForPeriod =
-              openingQtyForPeriod +
-              (purchasePeriodQtyMap.get(productId) || 0) -
-              (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
-              (salesPeriodQtyMap.get(productId) || 0) +
-              (saleReturnsPeriodQtyMap.get(productId) || 0);
-
-            const movementsBefore =
-              (purchaseBeforeQtyMap.get(productId) || 0) -
-              (purchaseReturnsBeforeQtyMap.get(productId) || 0) -
-              (salesBeforeQtyMap.get(productId) || 0) +
-              (saleReturnsBeforeQtyMap.get(productId) || 0);
-
+            // Movements IN the period
             const movementsInPeriod =
               (purchasePeriodQtyMap.get(productId) || 0) -
               (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
               (salesPeriodQtyMap.get(productId) || 0) +
               (saleReturnsPeriodQtyMap.get(productId) || 0);
 
-            // If user imported only an opening value but not an opening qty,
-            // qty-based valuation will show 0. In that case, we can still reflect
-            // the opening value ONLY when there are no invoice movements for the product
-            // (because we cannot reliably adjust value without quantities).
-            if (importedOpeningQty <= 0 && importedOpeningValue > 0) {
-              productsWithOpeningValueButNoQty += 1;
-              if (movementsBefore === 0 && movementsInPeriod === 0) {
-                openingStockValue += importedOpeningValue;
-                closingStockValue += importedOpeningValue;
-                return;
-              }
-              productsWithOpeningValueButNoQtyAndMovements += 1;
-            }
+            // Movements AFTER the period
+            const movementsAfter =
+              (purchaseAfterQtyMap.get(productId) || 0) -
+              (purchaseReturnsAfterQtyMap.get(productId) || 0) -
+              (salesAfterQtyMap.get(productId) || 0) +
+              (saleReturnsAfterQtyMap.get(productId) || 0);
 
-            // If there is no explicit opening stock (qty/value) but we do have a
-            // current_stock and a usable cost, and there have been NO invoice
-            // movements for this product (before or in the selected period),
-            // treat current_stock × cost as the opening (and closing) inventory.
-            // This is a migration shortcut for the very first period only; once
-            // movements exist, opening must come from opening_stock and history.
-            if (
-              importedOpeningQty <= 0 &&
-              importedOpeningValue <= 0 &&
-              currentStock > 0 &&
-              movementsBefore === 0 &&
-              movementsInPeriod === 0 &&
-              costPerUnit > 0
-            ) {
-              openingStockValue += currentStock * costPerUnit;
-              closingStockValue += currentStock * costPerUnit;
-              productsUsingCurrentStockAsOpening += 1;
-              return;
-            }
+            // Closing stock = current_stock - movementsAfter
+            const closingQtyForPeriod = currentStock - movementsAfter;
+            
+            // Opening stock = closing_stock - movementsInPeriod
+            const openingQtyForPeriod = closingQtyForPeriod - movementsInPeriod;
 
-            openingStockValue += openingQtyForPeriod * costPerUnit;
-            closingStockValue += closingQtyForPeriod * costPerUnit;
-          });
+            openingStockValue += Math.max(0, openingQtyForPeriod) * costPerUnit;
+            closingStockValue += Math.max(0, closingQtyForPeriod) * costPerUnit;
+          });;
 
           if ((products || []).length === 0) {
             toast({
               title: "Inventory not found",
               description:
                 "No products found at all, so Opening/Closing Stock will be 0. Please ensure products were created/imported.",
-              variant: "default",
-            });
-          } else if (productsWithOpeningValueButNoQty > 0) {
-            toast({
-              title: "Opening stock data needs qty",
-              description:
-                productsWithOpeningValueButNoQtyAndMovements > 0
-                  ? `${productsWithOpeningValueButNoQty} product(s) have Opening Stock Value but no Opening Stock Qty. ${productsWithOpeningValueButNoQtyAndMovements} of them also have invoice movements, so valuation may be incorrect. Please set Opening Stock Qty for accurate reports.`
-                  : `${productsWithOpeningValueButNoQty} product(s) have Opening Stock Value but no Opening Stock Qty. Opening value is shown only when there are no movements. Please set Opening Stock Qty for accurate reports.`,
-              variant: "default",
-            });
-          } else if (productsUsingCurrentStockAsOpening > 0) {
-            toast({
-              title: "Using current stock as opening",
-              description: `${productsUsingCurrentStockAsOpening} product(s) do not have explicit opening stock, but have current stock and no movements. Current Stock × Purchase Price is being treated as Opening/Closing Stock for this period.`,
               variant: "default",
             });
           }
@@ -702,8 +626,7 @@ export const ReportsManager: React.FC = () => {
           }
           
           // First get ledger IDs for the company
-          const { data: companyLedgers, error: ledgersError } = await supabase
-            .from('ledgers')
+          const { data: companyLedgers, error: ledgersError } = await (supabase as any).from('ledgers')
             .select('id, ledger_type')
             .eq('company_id', selectedCompany.company_name);
           
@@ -720,8 +643,7 @@ export const ReportsManager: React.FC = () => {
           // Use a join query to ensure we only get entries for ledgers that belong to this company
           let ledgerEntries: any[] = [];
           if (ledgerIds.length > 0 && user?.id) {
-            const { data: entriesData, error: entriesError } = await supabase
-              .from('ledger_entries')
+            const { data: entriesData, error: entriesError } = await (supabase as any).from('ledger_entries')
               .select('debit_amount, credit_amount, ledger_id, entry_date')
               .in('ledger_id', ledgerIds)
               .eq('user_id', user.id)
@@ -869,8 +791,7 @@ export const ReportsManager: React.FC = () => {
         
         case 'sales-report': {
           // Fetch sales invoices
-          const { data: salesData, error: salesDataError } = await supabase
-            .from('invoices')
+          const { data: salesData, error: salesDataError } = await (supabase as any).from('invoices')
             .select(`
               invoice_number,
               invoice_date,
@@ -899,8 +820,7 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Fetch sale return invoices
-          const { data: saleReturns, error: returnError } = await supabase
-            .from('invoices')
+          const { data: saleReturns, error: returnError } = await (supabase as any).from('invoices')
             .select(`
               invoice_number,
               invoice_date,
@@ -988,8 +908,7 @@ export const ReportsManager: React.FC = () => {
 
         case 'purchase-report': {
           // Fetch purchase orders
-          const { data: purchaseOrders, error: poError } = await supabase
-            .from('purchase_orders')
+          const { data: purchaseOrders, error: poError } = await (supabase as any).from('purchase_orders')
             .select(`
               po_number,
               order_date,
@@ -1016,8 +935,7 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Fetch purchase invoices
-          const { data: purchaseInvoices, error: invoiceError } = await supabase
-            .from('invoices')
+          const { data: purchaseInvoices, error: invoiceError } = await (supabase as any).from('invoices')
             .select(`
               invoice_number,
               invoice_date,
@@ -1046,8 +964,7 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Fetch purchase return invoices
-          const { data: purchaseReturns, error: returnError } = await supabase
-            .from('invoices')
+          const { data: purchaseReturns, error: returnError } = await (supabase as any).from('invoices')
             .select(`
               invoice_number,
               invoice_date,
@@ -1163,8 +1080,7 @@ export const ReportsManager: React.FC = () => {
 
         case 'invoice-aging': {
           // Fetch all sales invoices (including paid ones to check if payments were made)
-          const { data: agingInvoices, error: agingError } = await supabase
-            .from('invoices')
+          const { data: agingInvoices, error: agingError } = await (supabase as any).from('invoices')
             .select(`
               id,
               invoice_number,
@@ -1195,7 +1111,7 @@ export const ReportsManager: React.FC = () => {
           if (invoiceIds.length > 0) {
             const { data: { user } } = await supabase.auth.getUser();
             if (user?.id) {
-              const { data: paymentsData, error: paymentsError } = await supabase
+              const { data: paymentsData, error: paymentsError } = await (supabase as any)
                 .from('invoice_payments')
                 .select('invoice_id, amount, payment_date')
                 .in('invoice_id', invoiceIds)
@@ -1304,12 +1220,15 @@ export const ReportsManager: React.FC = () => {
               throw new Error('User not authenticated');
             }
 
-            // Derive a financial year label from the current date range to align with LedgerManager
-            const fyUtils = getCurrentFinancialYear();
+            // Derive financial year from the report start date (dateFrom),
+            // so a user running older period reports still gets the correct FY partition.
+            const fromDateObj = new Date(dateFrom);
+            const fyUtils = Number.isNaN(fromDateObj.getTime())
+              ? getCurrentFinancialYear()
+              : getFinancialYearForDate(fromDateObj);
             const financialYearLabel = fyUtils.label;
 
-            const { data: ledgersData, error: ledgersError } = await supabase
-              .from('ledgers')
+            const { data: ledgersData, error: ledgersError } = await (supabase as any).from('ledgers')
               .select('id, name, ledger_type, current_balance, opening_balance')
               .eq('company_id', selectedCompany.company_name)
               .eq('user_id', user.id)
@@ -1323,13 +1242,14 @@ export const ReportsManager: React.FC = () => {
             // Initialize with empty array if no ledgers found
             const ledgers = ledgersData || [];
             const ledgerIds = ledgers.map(l => l.id);
-            let ledgerEntriesMap = new Map<string, { debits: number; credits: number; legacy: number }>();
+            let periodEntriesMap = new Map<string, { debits: number; credits: number; legacy: number }>();
+            let prePeriodEntriesMap = new Map<string, { debits: number; credits: number }>();
             
-            // Fetch ledger entries for the period to calculate debits and credits
+            // Fetch ledger entries for the period to calculate debits and credits.
+            // Also fetch entries *before* dateFrom (within the same FY) to compute opening-as-of-dateFrom.
             if (ledgerIds.length > 0) {
-              const { data: entriesData, error: entriesError } = await supabase
-                .from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount, transaction_id')
+              const { data: entriesData, error: entriesError } = await (supabase as any).from('ledger_entries')
+                .select('ledger_id, debit_amount, credit_amount, transaction_id, entry_date')
                 .in('ledger_id', ledgerIds)
                 .eq('user_id', user.id)
                 .eq('financial_year', financialYearLabel)
@@ -1342,11 +1262,33 @@ export const ReportsManager: React.FC = () => {
               } else {
                 (entriesData || []).forEach(entry => {
                   const ledgerId = entry.ledger_id;
-                  const current = ledgerEntriesMap.get(ledgerId) || { debits: 0, credits: 0, legacy: 0 };
-                  ledgerEntriesMap.set(ledgerId, {
+                  const current = periodEntriesMap.get(ledgerId) || { debits: 0, credits: 0, legacy: 0 };
+                  periodEntriesMap.set(ledgerId, {
                     debits: current.debits + (Number(entry.debit_amount) || 0),
                     credits: current.credits + (Number(entry.credit_amount) || 0),
                     legacy: current.legacy + (!entry.transaction_id ? 1 : 0),
+                  });
+                });
+              }
+
+              // Pre-period entries (for opening-as-of-dateFrom)
+              const { data: preData, error: preError } = await (supabase as any).from('ledger_entries')
+                .select('ledger_id, debit_amount, credit_amount, entry_date')
+                .in('ledger_id', ledgerIds)
+                .eq('user_id', user.id)
+                .eq('financial_year', financialYearLabel)
+                .gte('entry_date', fyUtils.start.toISOString().split('T')[0])
+                .lt('entry_date', dateFrom);
+
+              if (preError) {
+                logger.error('Error fetching pre-period ledger entries:', preError);
+              } else {
+                (preData || []).forEach((entry: any) => {
+                  const ledgerId = entry.ledger_id;
+                  const current = prePeriodEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
+                  prePeriodEntriesMap.set(ledgerId, {
+                    debits: current.debits + (Number(entry.debit_amount) || 0),
+                    credits: current.credits + (Number(entry.credit_amount) || 0),
                   });
                 });
               }
@@ -1354,8 +1296,9 @@ export const ReportsManager: React.FC = () => {
 
             // Calculate all ledgers with opening, debits, credits, and closing balance
             sampleData = ledgers.map((l: any) => {
-              const entries = ledgerEntriesMap.get(l.id) || { debits: 0, credits: 0, legacy: 0 };
-              const openingBalance = Number(l.opening_balance) || 0;
+              const entries = periodEntriesMap.get(l.id) || { debits: 0, credits: 0, legacy: 0 };
+              const preEntries = prePeriodEntriesMap.get(l.id) || { debits: 0, credits: 0 };
+              const baseOpening = Number(l.opening_balance) || 0;
               const debits = Number(entries.debits) || 0;
               const credits = Number(entries.credits) || 0;
               
@@ -1368,13 +1311,35 @@ export const ReportsManager: React.FC = () => {
                 'sundry creditor', 'creditor', 'revenue', 'secondary loan', 'unsecured loan'
               ].includes(ledgerTypeLower);
               
-              // Calculate closing balance based on account type
-              // Credit balance: Opening + Credits - Debits (for Capital, Liabilities, Income)
-              // Debit balance: Opening + Debits - Credits (for Assets, Expenses)
+              // Compute opening balance as-of dateFrom by applying all FY transactions before dateFrom.
+              const openingBalance = isCreditBalanceAccount
+                ? baseOpening + (Number(preEntries.credits) || 0) - (Number(preEntries.debits) || 0)
+                : baseOpening + (Number(preEntries.debits) || 0) - (Number(preEntries.credits) || 0);
+              // Compute closing balance based on account type
+              // Credit balance: Opening + Credits - Debits
+              // Debit balance:  Opening + Debits - Credits
               const closingBalance = isCreditBalanceAccount
                 ? openingBalance + credits - debits
                 : openingBalance + debits - credits;
               
+              // Determine if final balance is Debit or Credit
+              let closingDebit = 0;
+              let closingCredit = 0;
+              
+              if (isCreditBalanceAccount) {
+                if (closingBalance >= 0) {
+                  closingCredit = closingBalance;
+                } else {
+                  closingDebit = Math.abs(closingBalance);
+                }
+              } else {
+                if (closingBalance >= 0) {
+                  closingDebit = closingBalance;
+                } else {
+                  closingCredit = Math.abs(closingBalance);
+                }
+              }
+
               return {
                 subcategory: l.name || 'Unknown',
                 amount: closingBalance,
@@ -1382,35 +1347,31 @@ export const ReportsManager: React.FC = () => {
                 opening_balance: openingBalance,
                 debits: debits,
                 credits: credits,
+                closing_debit: closingDebit,
+                closing_credit: closingCredit,
                 closing_balance: closingBalance,
                 difference: closingBalance - openingBalance,
                 legacy_entries: Number(entries.legacy) || 0,
               };
             });
 
-            // Calculate totals - handle empty arrays safely
-            const totalDebits = ledgerEntriesMap.size > 0 
-              ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.debits) || 0), 0)
-              : 0;
-            const totalCredits = ledgerEntriesMap.size > 0
-              ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.credits) || 0), 0)
-              : 0;
-            const legacyEntries = ledgerEntriesMap.size > 0
-              ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.legacy) || 0), 0)
-              : 0;
-            const totalOpening = ledgers.length > 0
-              ? ledgers.reduce((sum, l: any) => sum + (Number(l.opening_balance) || 0), 0)
-              : 0;
-            const totalClosing = sampleData.length > 0
-              ? sampleData.reduce((sum, item: any) => sum + (Number(item.closing_balance) || 0), 0)
-              : 0;
+            // Calculate totals based on closing balances (The actual Trial Balance principle)
+            const totalDebits = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_debit) || 0), 0);
+            const totalCredits = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_credit) || 0), 0);
+            const totalPeriodDebits = sampleData.reduce((sum, item: any) => sum + (Number(item.debits) || 0), 0);
+            const totalPeriodCredits = sampleData.reduce((sum, item: any) => sum + (Number(item.credits) || 0), 0);
+            
+            const legacyEntries = sampleData.reduce((sum, item: any) => sum + (Number(item.legacy_entries) || 0), 0);
+            const totalOpening = sampleData.reduce((sum, item: any) => sum + (Number(item.opening_balance) || 0), 0);
+            const totalClosing = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_balance) || 0), 0);
             const difference = totalDebits - totalCredits;
 
             newSummary = {
-              totalSales: totalCredits,
-              totalPurchases: totalDebits,
-              grossProfit: totalClosing - totalOpening,
+              totalSales: totalCredits, // Reusing field for Credit Total
+              totalPurchases: totalDebits, // Reusing field for Debit Total
+              grossProfit: totalPeriodDebits, // Reusing for Period Total Dr
               netProfit: difference, // Store difference for display
+              periodCredits: totalPeriodCredits,
               legacyEntries,
             };
             
@@ -1439,7 +1400,96 @@ export const ReportsManager: React.FC = () => {
           }
           break;
         }
-        
+        case 'balance-sheet': {
+          try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user?.id) throw new Error('User not authenticated');
+
+            const { data: ledgersData } = await (supabase as any).from('ledgers')
+              .select('id, name, ledger_type, opening_balance')
+              .eq('company_id', selectedCompany.company_name);
+            
+            const ledgers = ledgersData || [];
+            const ledgerIds = ledgers.map(l => l.id);
+
+            const inventoryAsOf = await getInventoryAsOf({
+              companyId: selectedCompany.company_name,
+              asOfDate: dateTo,
+            });
+            const closingStockValue = inventoryAsOf.reduce((sum, item) => sum + (Number(item.stock_value) || 0), 0);
+
+            const financialYearLabel = getFinancialYearForDate(new Date(dateTo)).label;
+            let ledgerEntriesMap = new Map<string, { debits: number; credits: number }>();
+            if (ledgerIds.length > 0) {
+              const { data: entriesData } = await (supabase as any).from('ledger_entries')
+                .select('ledger_id, debit_amount, credit_amount')
+                .in('ledger_id', ledgerIds)
+                .eq('user_id', user.id)
+                .eq('financial_year', financialYearLabel)
+                .lte('entry_date', dateTo);
+
+              (entriesData || []).forEach(entry => {
+                const lid = entry.ledger_id;
+                const cur = ledgerEntriesMap.get(lid) || { debits: 0, credits: 0 };
+                ledgerEntriesMap.set(lid, {
+                  debits: cur.debits + (Number(entry.debit_amount) || 0),
+                  credits: cur.credits + (Number(entry.credits_amount) || 0)
+                });
+              });
+            }
+
+            const assetRows: any[] = [];
+            const liabilityRows: any[] = [];
+            const equityRows: any[] = [];
+            
+            ledgers.forEach(l => {
+              const entries = ledgerEntriesMap.get(l.id) || { debits: 0, credits: 0 };
+              const baseOpening = Number(l.opening_balance) || 0;
+              const type = (l.ledger_type || '').toLowerCase();
+              const isCreditType = [
+                'capital', 'equity', 'loan', 'payables', 'liability', 'income',
+                'sundry creditor', 'creditor', 'revenue', 'secondary loan', 'unsecured loan'
+              ].includes(type);
+
+              const balance = isCreditType
+                ? baseOpening + entries.credits - entries.debits
+                : baseOpening + entries.debits - entries.credits;
+
+              if (['capital', 'equity'].includes(type)) {
+                equityRows.push({ subcategory: l.name, amount: balance, category: 'Equity' });
+              } else if (['loan', 'payables', 'liability', 'sundry creditor', 'creditor', 'secondary loan', 'unsecured loan'].includes(type)) {
+                liabilityRows.push({ subcategory: l.name, amount: balance, category: 'Liability' });
+              } else if (!['income', 'revenue', 'expense', 'expenses'].includes(type)) {
+                assetRows.push({ subcategory: l.name, amount: balance, category: 'Asset' });
+              }
+            });
+
+            assetRows.push({ subcategory: 'Closing Stock (Inventory)', amount: closingStockValue, category: 'Asset' });
+
+            const totalAssets = assetRows.reduce((sum, r) => sum + r.amount, 0);
+            const totalLiabilities = liabilityRows.reduce((sum, r) => sum + r.amount, 0);
+            const totalEquityBeforePL = equityRows.reduce((sum, r) => sum + r.amount, 0);
+            const retainedEarnings = totalAssets - totalLiabilities - totalEquityBeforePL;
+
+            equityRows.push({ subcategory: 'Profit & Loss A/c (Retained Earnings)', amount: retainedEarnings, category: 'Equity' });
+
+            sampleData = [...assetRows, ...liabilityRows, ...equityRows];
+            newSummary = {
+              totalAssets,
+              totalLiabilities,
+              totalEquity: totalEquityBeforePL + retainedEarnings,
+              retainedEarnings,
+              netProfit: retainedEarnings,
+              grossProfit: 0,
+              totalSales: totalAssets,
+              totalPurchases: totalLiabilities + totalEquityBeforePL + retainedEarnings
+            };
+          } catch (e: any) {
+            logger.error('Balance Sheet Error:', e);
+          }
+          break;
+        }
+
         case 'gst-report': {
           try {
             const { data: { user } } = await supabase.auth.getUser();
@@ -1456,8 +1506,7 @@ export const ReportsManager: React.FC = () => {
             // Fetch all GST entries for the company (all invoice types: sale/purchase/return/refund)
             let gstData: any[] = [];
             
-            const { data, error } = await supabase
-              .from('gst_entries')
+            const { data, error } = await (supabase as any).from('gst_entries')
               .select(`
                 transaction_type,
                 invoice_number,
@@ -1612,8 +1661,7 @@ export const ReportsManager: React.FC = () => {
             }
             
             // Fetch payable ledgers (accounts payable)
-            const { data: payableLedgers, error: payableError } = await supabase
-              .from('ledgers')
+            const { data: payableLedgers, error: payableError } = await (supabase as any).from('ledgers')
               .select('id, name, current_balance, opening_balance')
               .eq('company_id', selectedCompany.company_name)
               .eq('ledger_type', 'payables');
@@ -1623,8 +1671,7 @@ export const ReportsManager: React.FC = () => {
             }
 
             // Fetch receivable ledgers (accounts receivable)
-            const { data: receivableLedgers, error: receivableError } = await supabase
-              .from('ledgers')
+            const { data: receivableLedgers, error: receivableError } = await (supabase as any).from('ledgers')
               .select('id, name, current_balance, opening_balance')
               .eq('company_id', selectedCompany.company_name)
               .eq('ledger_type', 'receivables');
@@ -1640,8 +1687,7 @@ export const ReportsManager: React.FC = () => {
 
           let ledgerEntries: any[] = [];
           if (allLedgerIds.length > 0 && user?.id) {
-            const { data: entriesData } = await supabase
-              .from('ledger_entries')
+            const { data: entriesData } = await (supabase as any).from('ledger_entries')
               .select('ledger_id, debit_amount, credit_amount, description, entry_date')
               .in('ledger_id', allLedgerIds)
               .eq('user_id', user.id)
@@ -1652,8 +1698,7 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Fetch sales invoices
-          const { data: salesInvoices } = await supabase
-            .from('invoices')
+          const { data: salesInvoices } = await (supabase as any).from('invoices')
             .select('invoice_number, invoice_date, total_amount, invoice_type, payment_status, business_entities(name), suppliers(company_name)')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'sales')
@@ -1662,8 +1707,7 @@ export const ReportsManager: React.FC = () => {
             .order('invoice_date', { ascending: false });
 
           // Fetch purchase invoices
-          const { data: purchaseInvoices } = await supabase
-            .from('invoices')
+          const { data: purchaseInvoices } = await (supabase as any).from('invoices')
             .select('invoice_number, invoice_date, total_amount, invoice_type, payment_status, suppliers(company_name), business_entities(name)')
             .eq('company_id', selectedCompany.company_name)
             .eq('invoice_type', 'purchase')
@@ -1774,11 +1818,18 @@ export const ReportsManager: React.FC = () => {
               throw new Error('User not authenticated');
             }
 
-            const { data: ledgersData, error: ledgersError } = await supabase
-              .from('ledgers')
+            // Derive financial year from the report start date
+            const fromDateObj = new Date(dateFrom);
+            const fyUtils = Number.isNaN(fromDateObj.getTime())
+              ? getCurrentFinancialYear()
+              : getFinancialYearForDate(fromDateObj);
+            const financialYearLabel = fyUtils.label;
+
+            const { data: ledgersData, error: ledgersError } = await (supabase as any).from('ledgers')
               .select('id, name, ledger_type, current_balance, opening_balance')
               .eq('company_id', selectedCompany.company_name)
-              .eq('user_id', user.id);
+              .eq('user_id', user.id)
+              .eq('financial_year', financialYearLabel);
 
             if (ledgersError) {
               logger.error('Error fetching ledgers:', ledgersError);
@@ -1787,23 +1838,50 @@ export const ReportsManager: React.FC = () => {
 
             const ledgers = ledgersData || [];
             const ledgerIds = ledgers.map(l => l.id);
-            let ledgerEntriesMap = new Map<string, { debits: number; credits: number }>();
             
-            // Fetch all ledger entries (not just period) for summary
+            let periodEntriesMap = new Map<string, { debits: number; credits: number }>();
+            let prePeriodEntriesMap = new Map<string, { debits: number; credits: number }>();
+            
+            // Fetch ledger entries for the period and pre-period
             if (ledgerIds.length > 0) {
-              const { data: entriesData, error: entriesError } = await supabase
-                .from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount')
+              // Current period entries
+              const { data: entriesData, error: entriesError } = await (supabase as any).from('ledger_entries')
+                .select('ledger_id, debit_amount, credit_amount, entry_date')
                 .in('ledger_id', ledgerIds)
-                .eq('user_id', user.id);
+                .eq('user_id', user.id)
+                .eq('financial_year', financialYearLabel)
+                .gte('entry_date', dateFrom)
+                .lte('entry_date', dateTo);
 
               if (entriesError) {
                 logger.error('Error fetching ledger entries:', entriesError);
               } else {
                 (entriesData || []).forEach(entry => {
                   const ledgerId = entry.ledger_id;
-                  const current = ledgerEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
-                  ledgerEntriesMap.set(ledgerId, {
+                  const current = periodEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
+                  periodEntriesMap.set(ledgerId, {
+                    debits: current.debits + (Number(entry.debit_amount) || 0),
+                    credits: current.credits + (Number(entry.credit_amount) || 0)
+                  });
+                });
+              }
+
+              // Pre-period entries (from FY start to dateFrom)
+              const { data: preData, error: preError } = await (supabase as any).from('ledger_entries')
+                .select('ledger_id, debit_amount, credit_amount, entry_date')
+                .in('ledger_id', ledgerIds)
+                .eq('user_id', user.id)
+                .eq('financial_year', financialYearLabel)
+                .gte('entry_date', fyUtils.start.toISOString().split('T')[0])
+                .lt('entry_date', dateFrom);
+
+              if (preError) {
+                logger.error('Error fetching pre-period ledger entries:', preError);
+              } else {
+                (preData || []).forEach(entry => {
+                  const ledgerId = entry.ledger_id;
+                  const current = prePeriodEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
+                  prePeriodEntriesMap.set(ledgerId, {
                     debits: current.debits + (Number(entry.debit_amount) || 0),
                     credits: current.credits + (Number(entry.credit_amount) || 0)
                   });
@@ -1813,64 +1891,58 @@ export const ReportsManager: React.FC = () => {
 
             // Calculate all ledgers with opening, debits, credits, and closing balance
             sampleData = ledgers.map((l: any) => {
-              const entries = ledgerEntriesMap.get(l.id) || { debits: 0, credits: 0 };
-              const openingBalance = Number(l.opening_balance) || 0;
+              const entries = periodEntriesMap.get(l.id) || { debits: 0, credits: 0 };
+              const preEntries = prePeriodEntriesMap.get(l.id) || { debits: 0, credits: 0 };
+              const baseOpening = Number(l.opening_balance) || 0;
               const debits = Number(entries.debits) || 0;
               const credits = Number(entries.credits) || 0;
               
-              // Determine account type for proper balance calculation based on accounting rules
-              // Credit balance accounts: Capital, Equity, Loan, Payables, Liability, Income, Revenue, Sundry Creditor
-              // Debit balance accounts: Assets, Expenses, Cash, Bank, Receivables, Fixed Assets, Sundry Debtor
+              // Determine account type for proper balance calculation
               const ledgerTypeLower = (l.ledger_type || '').toLowerCase();
               const isCreditBalanceAccount = [
                 'capital', 'equity', 'loan', 'payables', 'liability', 'income',
                 'sundry creditor', 'creditor', 'revenue', 'secondary loan', 'unsecured loan'
               ].includes(ledgerTypeLower);
               
-              // Calculate closing balance based on account type
-              // Credit balance: Opening + Credits - Debits (for Capital, Liabilities, Income)
-              // Debit balance: Opening + Debits - Credits (for Assets, Expenses)
+              // Calculate opening balance as of dateFrom
+              const openingAsOfDate = isCreditBalanceAccount
+                ? baseOpening + (preEntries.credits) - (preEntries.debits)
+                : baseOpening + (preEntries.debits) - (preEntries.credits);
+                
+              // Calculate closing balance as of dateTo
               const closingBalance = isCreditBalanceAccount
-                ? openingBalance + credits - debits
-                : openingBalance + debits - credits;
+                ? openingAsOfDate + credits - debits
+                : openingAsOfDate + debits - credits;
               
               return {
                 subcategory: l.name || 'Unknown',
                 amount: closingBalance,
                 category: l.ledger_type || 'other',
-                opening_balance: openingBalance,
+                opening_balance: openingAsOfDate,
                 debits: debits,
                 credits: credits,
                 closing_balance: closingBalance
               };
             });
 
-            // Calculate totals - handle empty arrays safely
-            const totalDebits = ledgerEntriesMap.size > 0 
-              ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.debits) || 0), 0)
-              : 0;
-            const totalCredits = ledgerEntriesMap.size > 0
-              ? Array.from(ledgerEntriesMap.values()).reduce((sum, e) => sum + (Number(e.credits) || 0), 0)
-              : 0;
-            const totalOpening = ledgers.length > 0
-              ? ledgers.reduce((sum, l: any) => sum + (Number(l.opening_balance) || 0), 0)
-              : 0;
-            const totalClosing = sampleData.length > 0
-              ? sampleData.reduce((sum, item: any) => sum + (Number(item.closing_balance) || 0), 0)
-              : 0;
+            // Calculate totals for summary
+            const totalDebits = sampleData.reduce((sum, item: any) => sum + (Number(item.debits) || 0), 0);
+            const totalCredits = sampleData.reduce((sum, item: any) => sum + (Number(item.credits) || 0), 0);
+            const totalOpening = sampleData.reduce((sum, item: any) => sum + (Number(item.opening_balance) || 0), 0);
+            const totalClosing = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_balance) || 0), 0);
 
             newSummary = {
-              totalSales: totalCredits,
-              totalPurchases: totalDebits,
-              grossProfit: totalClosing - totalOpening,
-              netProfit: totalClosing
+              totalSales: totalCredits, // Total Credits
+              totalPurchases: totalDebits, // Total Debits
+              grossProfit: totalClosing - totalOpening, // Net Change
+              netProfit: totalClosing // Total Closing Balance
             };
             
             // Show message if no ledgers found
             if (ledgers.length === 0) {
               toast({
                 title: "No Ledgers Found",
-                description: "No ledgers found for this company. Please create ledgers first.",
+                description: `No ledgers found for company ${selectedCompany.company_name} in the ${financialYearLabel} financial year.`,
                 variant: "default"
               });
             }
@@ -1895,8 +1967,7 @@ export const ReportsManager: React.FC = () => {
         case 'return-void-report': {
           // Fetch all return/refund invoices (treated as void but kept for record-keeping)
           try {
-            const { data: saleReturns, error: saleReturnsError } = await supabase
-              .from('invoices')
+            const { data: saleReturns, error: saleReturnsError } = await (supabase as any).from('invoices')
               .select(`
                 id,
                 invoice_number,
@@ -1921,8 +1992,7 @@ export const ReportsManager: React.FC = () => {
               throw saleReturnsError;
             }
 
-            const { data: purchaseReturns, error: purchaseReturnsError } = await supabase
-              .from('invoices')
+            const { data: purchaseReturns, error: purchaseReturnsError } = await (supabase as any).from('invoices')
               .select(`
                 id,
                 invoice_number,
@@ -2050,8 +2120,7 @@ export const ReportsManager: React.FC = () => {
                 asOfDate: dateTo,
               });
 
-              // Still need selling/min stock for UI columns
-              const { data: productsExtra, error: productsExtraError } = await supabase
+              const { data: productsExtra, error: productsExtraError } = await (supabase as any)
                 .from("products")
                 .select("id, selling_price, min_stock_level, description")
                 .eq("company_id", selectedCompany.company_name);
@@ -2092,8 +2161,7 @@ export const ReportsManager: React.FC = () => {
               });
             } else {
               // Live snapshot using product master current_stock
-              const { data: products, error: productsError } = await supabase
-                .from('products')
+              const { data: products, error: productsError } = await (supabase as any).from('products')
                 .select('id, name, description, hsn_code, current_stock, purchase_price, selling_price, gst_rate, min_stock_level')
                 .eq('company_id', selectedCompany.company_name)
                 .order('name', { ascending: true });
@@ -2634,6 +2702,7 @@ export const ReportsManager: React.FC = () => {
                 <div>
                   <CardTitle>
                     {selectedReport === 'profit-loss' && 'Profit & Loss Statement'}
+                    {selectedReport === 'balance-sheet' && 'Balance Sheet'}
                     {selectedReport === 'trial-balance' && 'Trial Balance'}
                     {selectedReport === 'sales-report' && 'Sales Report'}
                     {selectedReport === 'purchase-report' && 'Purchase Report'}
@@ -2691,14 +2760,22 @@ export const ReportsManager: React.FC = () => {
                         <TableHead className="text-right">Amount</TableHead>
                       </>
                     )}
+                    {selectedReport === 'balance-sheet' && (
+                      <>
+                        <TableHead>Account Name</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                      </>
+                    )}
                     {selectedReport === 'trial-balance' && (
                       <>
                         <TableHead>Ledger Name</TableHead>
                         <TableHead>Type</TableHead>
-                        <TableHead className="text-right">Opening Balance</TableHead>
-                        <TableHead className="text-right">Debits</TableHead>
-                        <TableHead className="text-right">Credits</TableHead>
-                        <TableHead className="text-right">Closing Balance</TableHead>
+                        <TableHead className="text-right">Opening</TableHead>
+                        <TableHead className="text-right">Dr (Pd)</TableHead>
+                        <TableHead className="text-right">Cr (Pd)</TableHead>
+                        <TableHead className="text-right">Closing Dr</TableHead>
+                        <TableHead className="text-right">Closing Cr</TableHead>
                       </>
                     )}
                     {selectedReport === 'sales-report' && (
@@ -2830,10 +2907,29 @@ export const ReportsManager: React.FC = () => {
                             </div>
                           </TableCell>
                           <TableCell>{row.category}</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(Number(row.opening_balance) || 0)}</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(Number(row.debits) || 0)}</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(Number(row.credits) || 0)}</TableCell>
-                          <TableCell className="text-right">{formatIndianCurrency(Number(row.closing_balance) || 0)}</TableCell>
+                          <TableCell className="text-right text-muted-foreground text-xs">{formatIndianCurrency(Number(row.opening_balance) || 0)}</TableCell>
+                          <TableCell className="text-right text-muted-foreground text-xs">{formatIndianCurrency(Number(row.debits) || 0)}</TableCell>
+                          <TableCell className="text-right text-muted-foreground text-xs">{formatIndianCurrency(Number(row.credits) || 0)}</TableCell>
+                          <TableCell className="text-right font-semibold text-green-600">
+                            {Number((row as any).closing_debit) > 0 ? formatIndianCurrency(Number((row as any).closing_debit)) : '-'}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold text-red-600">
+                            {Number((row as any).closing_credit) > 0 ? formatIndianCurrency(Number((row as any).closing_credit)) : '-'}
+                          </TableCell>
+                        </>
+                      )}
+                      {selectedReport === 'balance-sheet' && (
+                        <>
+                          <TableCell className="font-medium">{row.subcategory}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={
+                              row.category === 'Asset' ? 'text-green-500' :
+                              row.category === 'Liability' ? 'text-red-500' : 'text-blue-500'
+                            }>
+                              {row.category}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-medium">{formatIndianCurrency(row.amount)}</TableCell>
                         </>
                       )}
                       {selectedReport === 'sales-report' && (
@@ -3143,8 +3239,8 @@ export const ReportsManager: React.FC = () => {
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Difference</p>
-                      <p className={`text-lg font-semibold ${summary.netProfit < 0 ? 'text-red-500' : summary.netProfit > 0 ? 'text-blue-500' : 'text-green-500'}`}>
+                      <p className="text-sm text-muted-foreground">Difference (Dr - Cr)</p>
+                      <p className={`text-lg font-semibold ${summary.netProfit !== 0 ? 'text-red-500' : 'text-green-500'}`}>
                         {formatIndianCurrency(Math.abs(summary.netProfit))}
                         {summary.netProfit !== 0 && (summary.netProfit < 0 ? ' (Dr)' : ' (Cr)')}
                       </p>
@@ -3181,6 +3277,35 @@ export const ReportsManager: React.FC = () => {
                         </div>
                       </div>
                     )}
+                  </>
+                )}
+                
+                {selectedReport === 'balance-sheet' && (
+                  <>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Total Assets</p>
+                      <p className="text-lg font-semibold text-green-500">
+                        {formatIndianCurrency(summary.totalAssets || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Total Liabilities</p>
+                      <p className="text-lg font-semibold text-red-500">
+                        {formatIndianCurrency(summary.totalLiabilities || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Total Equity</p>
+                      <p className="text-lg font-semibold text-blue-500">
+                        {formatIndianCurrency(summary.totalEquity || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Status</p>
+                      <p className="text-lg font-semibold text-green-600">
+                        Balanced
+                      </p>
+                    </div>
                   </>
                 )}
                 

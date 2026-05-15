@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -11,6 +12,7 @@ import { DateInput } from "@/components/ui/date-input";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
+import { useSubscription } from "@/hooks/useSubscription";
 import { Plus, FileText, Download, Edit, Trash2, Eye, Receipt } from "lucide-react";
 import { formatIndianCurrency, calculateGST, getFinancialYearForDate } from "@/utils/indianBusiness";
 import { downloadInvoiceAsCSV } from "@/utils/pdfGenerator";
@@ -141,6 +143,7 @@ interface InvoicePayment {
 
 export const InvoiceManager = () => {
   const { selectedCompany } = useCompany();
+  const { isReadOnly } = useSubscription();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [hidePaidInvoices, setHidePaidInvoices] = useState(true);
@@ -155,6 +158,7 @@ export const InvoiceManager = () => {
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
   const [showNewEntityForm, setShowNewEntityForm] = useState(false);
+  const [showDiscountFields, setShowDiscountFields] = useState(false);
   const [formData, setFormData] = useState({
     entity_id: "",
     entity_type: "customer" as string,
@@ -804,7 +808,7 @@ export const InvoiceManager = () => {
         product_id: item.product_id || null, // Store product_id for inventory tracking
         description: item.description.trim(),
         quantity: item.quantity,
-        unit_price: item.unit_price,
+        unit_price: item.unit_price, // Base price
         gst_rate: item.gst_rate,
         line_total: item.quantity * item.unit_price
       }));
@@ -849,14 +853,26 @@ export const InvoiceManager = () => {
           const fy = getFinancialYearForDate(new Date(formData.invoice_date)).label;
 
           if (formData.invoice_type === "sales") {
-            // Debit Cash/Bank or Receivables, Credit Sales
+            // Debit Cash/Bank or Receivables (Net Value), Debit Discount Allowed, Credit Sales (Gross Value)
             const debitLedger =
               formData.payment_status === "paid"
                 ? cashLedgerId || bankLedgerId || receivablesLedgerId
                 : receivablesLedgerId || cashLedgerId || bankLedgerId;
+            
             if (debitLedger && salesLedgerId) {
-              lines.push({ ledger_id: debitLedger, amount, side: "debit" });
-              lines.push({ ledger_id: salesLedgerId, amount, side: "credit" });
+              lines.push({ ledger_id: debitLedger, amount: amount, side: "debit" }); // Asset hit (Cash/Receivable)
+              
+              if ((formData.discount_amount || 0) > 0) {
+                 // Try looking up a discount expense ledger, or dump into general expense
+                 const discountLedger = findLedger("discount allowed") || purchaseLedgerId;
+                 if (discountLedger) {
+                   lines.push({ ledger_id: discountLedger, amount: formData.discount_amount, side: "debit" }); // Indirect Exp.
+                 }
+                 // Gross Credit to Sales = Net Total + Discount 
+                 lines.push({ ledger_id: salesLedgerId, amount: amount + formData.discount_amount, side: "credit" });
+              } else {
+                 lines.push({ ledger_id: salesLedgerId, amount: amount, side: "credit" });
+              }
             }
           } else if (formData.invoice_type === "sale_return") {
             // Reverse of sales: Debit Sales (reduce income), Credit Cash/Bank or Receivables
@@ -869,14 +885,25 @@ export const InvoiceManager = () => {
               lines.push({ ledger_id: creditLedger, amount, side: "credit" });
             }
           } else if (formData.invoice_type === "purchase") {
-            // Debit Purchases/Expenses, Credit Cash/Bank or Payables
+            // Debit Purchases/Expenses (Gross Value), Credit Discount Received, Credit Payables/Cash (Net Value)
             const creditLedger =
               formData.payment_status === "paid"
                 ? cashLedgerId || bankLedgerId || payablesLedgerId
                 : payablesLedgerId || cashLedgerId || bankLedgerId;
+                
             if (purchaseLedgerId && creditLedger) {
-              lines.push({ ledger_id: purchaseLedgerId, amount, side: "debit" });
-              lines.push({ ledger_id: creditLedger, amount, side: "credit" });
+              if ((formData.discount_amount || 0) > 0) {
+                 lines.push({ ledger_id: purchaseLedgerId, amount: amount + formData.discount_amount, side: "debit" }); // Gross Exp.
+                 
+                 const discountLedger = findLedger("discount received") || salesLedgerId;
+                 if (discountLedger) {
+                   lines.push({ ledger_id: discountLedger, amount: formData.discount_amount, side: "credit" }); // Indirect Inc.
+                 }
+                 lines.push({ ledger_id: creditLedger, amount: amount, side: "credit" }); // Liability hit (Payable/Cash)
+              } else {
+                 lines.push({ ledger_id: purchaseLedgerId, amount: amount, side: "debit" });
+                 lines.push({ ledger_id: creditLedger, amount: amount, side: "credit" });
+              }
             }
           } else if (formData.invoice_type === "purchase_return") {
             // Reverse of purchase: Debit Cash/Bank or Payables, Credit Purchases/Expenses
@@ -1483,6 +1510,7 @@ export const InvoiceManager = () => {
     setApplyTaxOnSubtotal(false);
     setSubtotalTaxRate(18);
     setShowNewEntityForm(false);
+    setShowDiscountFields(false);
     setSelectedPO("");
     setPOItems([]);
     setOpen(false);
@@ -1541,8 +1569,7 @@ export const InvoiceManager = () => {
       const productNameLower = productName.toLowerCase();
 
       // Check for duplicate product name
-      // @ts-expect-error - TypeScript has issues with deep type inference on Supabase queries
-      const { data: existingProducts, error: checkError } = await supabase
+      const { data: existingProducts, error: checkError } = await (supabase as any)
         .from('products')
         .select('id, name')
         .eq('company_id', selectedCompany?.company_name || '')
@@ -1674,6 +1701,7 @@ export const InvoiceManager = () => {
             setApplyTaxOnSubtotal(false);
             setSubtotalTaxRate(18);
             setShowNewEntityForm(false);
+            setShowDiscountFields(false);
             setSelectedPO("");
             setPOItems([]);
             // Refresh POs when dialog opens if it's a purchase type
@@ -1683,12 +1711,15 @@ export const InvoiceManager = () => {
           }
         }}>
           <DialogTrigger asChild>
-            <Button onClick={() => {
-              // Refresh POs when opening dialog if it's a purchase type
-              if (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return') {
-                fetchPurchaseOrders(formData.invoice_type);
-              }
-            }}>
+            <Button 
+              disabled={isReadOnly}
+              onClick={() => {
+                // Refresh POs when opening dialog if it's a purchase type
+                if (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return') {
+                  fetchPurchaseOrders(formData.invoice_type);
+                }
+              }}
+            >
               <Plus className="w-4 h-4 mr-2" />
               Create Invoice
             </Button>
@@ -2373,44 +2404,64 @@ export const InvoiceManager = () => {
               </div>
 
               {/* Discount Fields */}
-              <div className="grid grid-cols-2 gap-4 mb-4 border-t pt-4">
-                <div>
-                  <Label htmlFor="discount-amount">Discount Amount (₹)</Label>
-                  <Input
-                    id="discount-amount"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={formData.discount_amount}
-                    onChange={(e) => {
-                      const amount = parseFloat(e.target.value) || 0;
-                      setFormData(prev => ({
-                        ...prev,
-                        discount_amount: amount
-                        // Allow both flat and percentage to work independently
-                      }));
-                    }}
+              <div className="border-t pt-4 mb-4">
+                <div className="flex items-center space-x-2 mb-4">
+                  <Switch 
+                    id="enable-discount" 
+                    checked={showDiscountFields} 
+                    onCheckedChange={(checked) => {
+                      setShowDiscountFields(checked);
+                      if (!checked) {
+                        setFormData(prev => ({
+                          ...prev,
+                          discount_amount: 0,
+                          discount_percentage: 0
+                        }));
+                      }
+                    }} 
                   />
+                  <Label htmlFor="enable-discount">Apply Discount?</Label>
                 </div>
-                <div>
-                  <Label htmlFor="discount-percentage">Discount Percentage (%)</Label>
-                  <Input
-                    id="discount-percentage"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="100"
-                    value={formData.discount_percentage}
-                    onChange={(e) => {
-                      const percentage = parseFloat(e.target.value) || 0;
-                      setFormData(prev => ({
-                        ...prev,
-                        discount_percentage: percentage
-                        // Allow both flat and percentage to work independently
-                      }));
-                    }}
-                  />
-                </div>
+                
+                {showDiscountFields && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="discount-amount">Discount Amount (₹)</Label>
+                      <Input
+                        id="discount-amount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.discount_amount}
+                        onChange={(e) => {
+                          const amount = parseFloat(e.target.value) || 0;
+                          setFormData(prev => ({
+                            ...prev,
+                            discount_amount: amount
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="discount-percentage">Discount Percentage (%)</Label>
+                      <Input
+                        id="discount-percentage"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={formData.discount_percentage}
+                        onChange={(e) => {
+                          const percentage = parseFloat(e.target.value) || 0;
+                          setFormData(prev => ({
+                            ...prev,
+                            discount_percentage: percentage
+                          }));
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="border-t pt-4">
@@ -2580,6 +2631,7 @@ export const InvoiceManager = () => {
                         size="sm" 
                         onClick={() => openPaymentDialog(invoice)}
                         className="bg-green-600 hover:bg-green-700"
+                        disabled={isReadOnly}
                       >
                         Record Payment
                       </Button>
@@ -2595,6 +2647,7 @@ export const InvoiceManager = () => {
                       size="sm" 
                       onClick={() => handleDelete(invoice.id)}
                       className="text-destructive hover:text-destructive"
+                      disabled={isReadOnly}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>
@@ -2850,7 +2903,11 @@ export const InvoiceManager = () => {
               
               <div className="flex justify-end gap-2">
                 {(selectedInvoice.amount_due === undefined || selectedInvoice.amount_due > 0) && (
-                  <Button variant="outline" onClick={() => openPaymentDialog(selectedInvoice)}>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => openPaymentDialog(selectedInvoice)}
+                    disabled={isReadOnly}
+                  >
                     Record Payment
                   </Button>
                 )}
@@ -3017,7 +3074,7 @@ export const InvoiceManager = () => {
                 <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>
                   Cancel
                 </Button>
-                <Button onClick={recordPayment}>
+                <Button onClick={recordPayment} disabled={isReadOnly}>
                   Record Payment
                 </Button>
               </div>

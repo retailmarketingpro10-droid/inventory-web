@@ -1,4 +1,5 @@
 import React, { Suspense, lazy } from "react";
+import Joyride, { CallBackProps, Step } from "react-joyride";
 import { 
   Package, 
   BarChart3, 
@@ -86,6 +87,28 @@ const Index = () => {
     email: "",
     phone: "",
   });
+
+  const tourStorageKey = `tourDone_web_${user?.id || "anon"}`;
+  const [runTour, setRunTour] = React.useState(false);
+
+  const joyrideSteps: Step[] = [
+    { target: ".tour-nav-products", content: "Manage your product master and stock levels here." },
+    { target: ".tour-nav-invoices", content: "Create and manage invoices (sales/purchase/returns)." },
+    { target: ".tour-nav-reports", content: "Generate Profit & Loss, Trial Balance, GST and more." },
+    { target: ".tour-nav-settings", content: "Company settings and configuration live here." },
+    { target: ".tour-quick-actions", content: "Use Quick Actions for faster daily workflows." },
+  ];
+
+  React.useEffect(() => {
+    try {
+      if (!user?.id) return;
+      const done = localStorage.getItem(tourStorageKey) === "true";
+      setRunTour(!done);
+    } catch {
+      // If storage is unavailable, don't block the app.
+      setRunTour(false);
+    }
+  }, [tourStorageKey, user?.id]);
 
   // Check online/offline status
   React.useEffect(() => {
@@ -394,6 +417,25 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      <Joyride
+        steps={joyrideSteps}
+        run={runTour}
+        continuous={true}
+        showSkipButton={true}
+        scrollToFirstStep={true}
+        disableOverlayClose={true}
+        callback={(data: CallBackProps) => {
+          if (data.status === "finished" || data.status === "skipped") {
+            try {
+              localStorage.setItem(tourStorageKey, "true");
+            } catch {
+              // ignore
+            }
+            setRunTour(false);
+          }
+        }}
+        styles={{ options: { primaryColor: "#FF6B35", zIndex: 10000 } }}
+      />
       {/* Header */}
       <header className="bg-card shadow-sm border-b border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -644,6 +686,7 @@ const Index = () => {
                   icon={<Package className="h-5 w-5" />}
                   active={activeTab === "products"}
                   onClick={setActiveTab}
+                  className="tour-nav-products"
                 />
                 <NavButton
                   id="purchase-orders"
@@ -672,6 +715,7 @@ const Index = () => {
                   icon={<FileText className="h-5 w-5" />}
                   active={activeTab === "invoices"}
                   onClick={setActiveTab}
+                  className="tour-nav-invoices"
                 />
                 <NavButton
                   id="gst-calculator"
@@ -693,6 +737,7 @@ const Index = () => {
                   icon={<BarChart3 className="h-5 w-5" />}
                   active={activeTab === "reports"}
                   onClick={setActiveTab}
+                  className="tour-nav-reports"
                 />
                 <NavButton
                   id="ledger"
@@ -714,6 +759,7 @@ const Index = () => {
                   icon={<Settings className="h-6 w-6" />}
                   active={activeTab === "settings"}
                   onClick={setActiveTab}
+                  className="tour-nav-settings"
                 />
                 </nav>
               </div>
@@ -864,7 +910,7 @@ const Index = () => {
                       <h3 className="text-lg font-semibold text-card-foreground mb-4">
                         Quick Actions
                       </h3>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 tour-quick-actions">
                         <button
                           onClick={() => setActiveTab("products")}
                           className="bg-primary/10 border border-primary/20 rounded-lg p-4 text-center hover:bg-primary/20 transition-colors group"
