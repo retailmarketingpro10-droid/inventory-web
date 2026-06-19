@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { logger } from '@/lib/logger';
 import { useNavigate } from 'react-router-dom';
@@ -42,7 +42,11 @@ const Auth = () => {
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isRecoveryMode, setIsRecoveryMode] = useState(false);
+  const isRecoveryModeRef = useRef(false);
   
   // Contact form states
   const [isSubmittingContact, setIsSubmittingContact] = useState(false);
@@ -58,12 +62,26 @@ const Auth = () => {
   const navigate = useNavigate();
   
   // Get view from URL params
-  const [currentView, setCurrentView] = useState<'login' | 'support' | 'signup'>('login');
+  const [currentView, setCurrentView] = useState<'login' | 'support' | 'signup' | 'reset-password'>('login');
+
+  const isPasswordRecoveryUrl = () => {
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const queryParams = new URLSearchParams(window.location.search);
+    return hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery';
+  };
   
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const view = params.get('view') as 'login' | 'support' | 'signup';
-    if (view && ['login', 'support', 'signup'].includes(view)) {
+    const view = params.get('view') as 'login' | 'support' | 'signup' | 'reset-password';
+
+    if (isPasswordRecoveryUrl()) {
+      isRecoveryModeRef.current = true;
+      setIsRecoveryMode(true);
+      setCurrentView('reset-password');
+      return;
+    }
+
+    if (view && ['login', 'support', 'signup', 'reset-password'].includes(view)) {
       setCurrentView(view);
     } else {
       setCurrentView('login');
@@ -71,18 +89,37 @@ const Auth = () => {
   }, []);
 
   useEffect(() => {
-    // Check if user is already logged in
+    const enterRecoveryIfNeeded = () => {
+      if (isPasswordRecoveryUrl()) {
+        isRecoveryModeRef.current = true;
+        setIsRecoveryMode(true);
+        setCurrentView('reset-password');
+        return true;
+      }
+      return false;
+    };
+
+    enterRecoveryIfNeeded();
+
     const checkUser = async () => {
+      if (enterRecoveryIfNeeded()) return;
+
       const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
+      if (session && !isRecoveryModeRef.current) {
         navigate('/dashboard');
       }
     };
     checkUser();
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
+      if (event === 'PASSWORD_RECOVERY' || isPasswordRecoveryUrl()) {
+        isRecoveryModeRef.current = true;
+        setIsRecoveryMode(true);
+        setCurrentView('reset-password');
+        return;
+      }
+
+      if (session && !isRecoveryModeRef.current) {
         navigate('/dashboard');
       }
     });
@@ -98,6 +135,87 @@ const Auth = () => {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
+  const formatAuthError = (message: string) => {
+    const lower = message.toLowerCase();
+    if (lower.includes('rate limit') || lower.includes('email rate')) {
+      return 'Too many emails sent. Wait 15–60 minutes and try again, or ask an admin to reset your password in Supabase (Authentication → Users).';
+    }
+    if (lower.includes('email not confirmed') || lower.includes('not confirmed')) {
+      return 'Please confirm your email first. Check your inbox (and spam) for the verification link, then try signing in again.';
+    }
+    if (lower.includes('invalid login credentials') || lower.includes('invalid credentials')) {
+      return 'Invalid email or password. Use Forgot password below, or reset it in Supabase if you are the admin.';
+    }
+    return message;
+  };
+
+  const handleForgotPassword = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError('Enter your email above, then click Forgot password.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
+        redirectTo: `${window.location.origin}/auth?view=reset-password`,
+      });
+
+      if (error) {
+        setError(formatAuthError(error.message));
+      } else {
+        toast.success('Password reset link sent. Check your inbox and spam folder.');
+        setError(
+          `If an account exists for ${trimmedEmail}, we sent a password reset link. Open it and set a new password, then sign in here.`
+        );
+      }
+    } catch {
+      setError('Could not send reset email. Try again or contact support.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) {
+        setError(formatAuthError(error.message));
+        return;
+      }
+
+      toast.success('Password updated successfully! Please sign in.');
+      await supabase.auth.signOut({ scope: 'local' });
+      isRecoveryModeRef.current = false;
+      setIsRecoveryMode(false);
+      setNewPassword('');
+      setConfirmPassword('');
+      setPassword('');
+      setCurrentView('login');
+      window.history.replaceState({}, '', '/auth?view=login');
+    } catch {
+      setError('Could not update password. Request a new reset link and try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -105,12 +223,12 @@ const Auth = () => {
 
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email,
+        email: email.trim(),
         password,
       });
 
       if (error) {
-        setError(error.message);
+        setError(formatAuthError(error.message));
       } else {
         toast.success('Successfully signed in!');
       }
@@ -128,29 +246,38 @@ const Auth = () => {
 
     try {
       const { data, error } = await supabase.auth.signUp({
-        email,
+        email: email.trim(),
         password,
         options: {
+          emailRedirectTo: `${window.location.origin}/auth?view=login`,
           data: {
-            full_name: email.split('@')[0], // Default name
-          }
-        }
+            full_name: email.split('@')[0],
+          },
+        },
       });
 
       if (error) {
         if (error.message.includes('already registered')) {
-          // Auto-login existing user as requested
-          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+          const { error: signInError } = await supabase.auth.signInWithPassword({
+            email: email.trim(),
+            password,
+          });
           if (signInError) {
-            setError('Account already exists. Please check your password and sign in.');
+            setError(formatAuthError('Account already exists. Please check your password and sign in.'));
           }
-          // Success handled by auth state change
           return;
         }
-        setError(error.message);
-      } else if (data.user) {
+        setError(formatAuthError(error.message));
+      } else if (data.session) {
         toast.success('Account created successfully!');
         navigate('/dashboard');
+      } else if (data.user) {
+        toast.success('Account created! Check your email to verify before signing in.');
+        setCurrentView('login');
+        setPassword('');
+        setError(
+          'We sent a verification link to your email. Open it, then sign in here. Check spam if you do not see it within a few minutes.'
+        );
       }
     } catch (err) {
       setError('An unexpected error occurred during signup');
@@ -450,6 +577,90 @@ Inventory Migrator Team
           </div>
         )}
 
+        {/* Reset password (from email link) */}
+        {currentView === 'reset-password' && (
+          <div className="w-full max-w-md mx-auto">
+            <Card className="relative z-10 shadow-2xl border-2 border-primary/30 backdrop-blur-2xl bg-gradient-to-br from-slate-900/80 via-slate-800/70 to-slate-900/80">
+              <CardHeader className="text-center pb-6 pt-10">
+                <CardTitle className="text-3xl font-black bg-gradient-to-r from-white via-primary to-blue-400 bg-clip-text text-transparent mb-3">
+                  Set new password
+                </CardTitle>
+                <CardDescription className="text-base font-medium text-foreground/80">
+                  Choose a new password for your account
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pb-10">
+                <form onSubmit={handleUpdatePassword} className="space-y-5">
+                  <div className="space-y-2">
+                    <Label htmlFor="new-password">New password</Label>
+                    <Input
+                      id="new-password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="At least 6 characters"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="bg-slate-800/50 border-white/10 h-12"
+                      required
+                      minLength={6}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="confirm-password">Confirm password</Label>
+                    <Input
+                      id="confirm-password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Re-enter new password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="bg-slate-800/50 border-white/10 h-12"
+                      required
+                      minLength={6}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    {showPassword ? 'Hide passwords' : 'Show passwords'}
+                  </button>
+                  {error && (
+                    <Alert variant="destructive">
+                      <AlertDescription className="flex items-center gap-2 text-sm">
+                        <AlertCircle className="h-4 w-4" />
+                        {error}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  <Button type="submit" className="w-full h-12 text-lg font-bold" disabled={isLoading}>
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      'Update password'
+                    )}
+                  </Button>
+                </form>
+                <p className="text-center mt-6 text-sm text-muted-foreground">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRecoveryMode(false);
+                      setCurrentView('login');
+                      window.history.replaceState({}, '', '/auth?view=login');
+                    }}
+                    className="text-primary font-bold"
+                  >
+                    Back to sign in
+                  </button>
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* Ultra-Premium Login View */}
         {currentView === 'login' && (
           <div className="w-full max-w-md mx-auto">
@@ -540,6 +751,16 @@ Inventory Migrator Team
                         tabIndex={-1}
                       >
                         {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                      </button>
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleForgotPassword}
+                        className="text-sm text-primary hover:underline font-medium"
+                        disabled={isLoading}
+                      >
+                        Forgot password?
                       </button>
                     </div>
                   </div>

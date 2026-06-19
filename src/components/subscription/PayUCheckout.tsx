@@ -20,7 +20,7 @@ const PAYU_BASE_URL = PAYU_TEST_MODE
 interface PayUCheckoutProps {
   amount: number;
   productInfo: string;
-  subscriptionType: 'annual' | 'monthly';
+  subscriptionType: 'monthly' | 'yearly' | 'annual';
   onSuccess?: () => void;
   onFailure?: (error: string) => void;
   onCancel?: () => void;
@@ -143,30 +143,34 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
       const startDate = new Date();
       const endDate = new Date();
       
-      if (subscriptionType === 'annual') {
-        endDate.setFullYear(endDate.getFullYear() + 1);
-      } else {
+      const dbSubscriptionType =
+        subscriptionType === 'monthly' ? 'monthly' : 'yearly';
+      const planLabel =
+        subscriptionType === 'monthly' ? 'Monthly' : 'Yearly';
+
+      if (subscriptionType === 'monthly') {
         endDate.setMonth(endDate.getMonth() + 1);
+      } else {
+        endDate.setFullYear(endDate.getFullYear() + 1);
       }
 
-      // Insert pending subscription
+      const subscriptionRow: Record<string, unknown> = {
+        user_id: user.id,
+        subscription_type: dbSubscriptionType,
+        status: 'pending',
+        amount_paid: amount,
+        start_date: startDate.toISOString().split('T')[0],
+        end_date: endDate.toISOString().split('T')[0],
+        renewal_date: endDate.toISOString().split('T')[0],
+        payment_status: 'pending',
+        payment_method: 'payu',
+        transaction_id: txnid,
+        notes: `PayU web checkout — ${planLabel}`,
+      };
+
       const { error: subscriptionError } = await (supabase as any)
         .from('subscriptions')
-        .insert({
-          user_id: user.id,
-          subscription_type: subscriptionType,
-          status: 'pending',
-          payment_amount: amount,
-          plan_name: 'Annual Maintenance',
-          payment_gateway: 'PayU',
-          start_date: startDate.toISOString().split('T')[0],
-          end_date: endDate.toISOString().split('T')[0],
-          renewal_date: endDate.toISOString().split('T')[0],
-          payment_status: 'pending',
-          payment_method: 'payu',
-          transaction_id: txnid,
-          notes: 'Payment initiated via PayU',
-        });
+        .insert(subscriptionRow);
 
       if (subscriptionError) {
         logger.error('Error creating pending subscription:', subscriptionError);
@@ -175,7 +179,7 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
 
       // UDF fields for storing user context
       const udf1 = user.id;           // Store user_id
-      const udf2 = subscriptionType;   // Store subscription type
+      const udf2 = dbSubscriptionType;
       const udf3 = '';
       const udf4 = '';
       const udf5 = '';
@@ -196,9 +200,9 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
         PAYU_MERCHANT_SALT
       );
 
-      // Success and Failure URLs - redirect back to our app
-      const successUrl = `${SITE_URL}/payment-success`;
-      const failureUrl = `${SITE_URL}/payment-failure`;
+      // PayU POSTs payment result to surl/furl — use API paths that redirect to SPA routes
+      const successUrl = `${SITE_URL}/api/payu-success`;
+      const failureUrl = `${SITE_URL}/api/payu-failure`;
 
       // Set form data - this will trigger the form submission
       setFormData({

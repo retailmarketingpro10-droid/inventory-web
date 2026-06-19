@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { useAuth } from "@/hooks/useAuth";
 import { useSubscription } from "@/hooks/useSubscription";
 import { CompanyProvider } from "@/contexts/CompanyContext";
+import { SubscriptionProvider } from "@/hooks/useSubscription";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Landing from "./pages/Landing";
@@ -19,12 +20,21 @@ import AccountDeletion from "./pages/AccountDeletion";
 import PaymentSuccess from "./pages/PaymentSuccess";
 import PaymentFailure from "./pages/PaymentFailure";
 import { PaymentRequired } from "@/components/subscription/PaymentRequired";
+import { WebAccessBlocked } from "@/components/subscription/WebAccessBlocked";
 
 const queryClient = new QueryClient();
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, loading: authLoading } = useAuth();
-  const { isActive, isExpired, loading: subscriptionLoading, daysRemaining } = useSubscription();
+  const {
+    hasWebAccess,
+    isFreeMobile,
+    isPaidPlan,
+    isExpired,
+    loading: subscriptionLoading,
+    daysRemaining,
+    planId,
+  } = useSubscription();
   const location = useLocation();
   
   // Show loading while checking authentication
@@ -41,23 +51,22 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/" replace />;
   }
   
-  // Allow access to subscription page even if expired (so user can renew)
   const searchParams = new URLSearchParams(location.search);
-  const isSubscriptionPage = location.pathname === '/dashboard' && 
-    searchParams.get('tab') === 'subscription';
+  const isSubscriptionPage =
+    location.pathname === '/dashboard' && searchParams.get('tab') === 'subscription';
   
-  // Block access if subscription is expired or not active (except subscription page)
-  // Only show payment required if subscription is actually expired (daysRemaining <= 0)
-  // Allow access if daysRemaining > 0 (even if isExpired flag is set due to edge cases)
-  // Always allow access to subscription page so users can renew
-  if (!isSubscriptionPage) {
-    if (isExpired && daysRemaining <= 0) {
-      return <PaymentRequired daysRemaining={daysRemaining} />;
+  if (!isSubscriptionPage && !hasWebAccess) {
+    // Free mobile / no paid plan — web is not included
+    if (isFreeMobile || !isPaidPlan) {
+      return <WebAccessBlocked />;
     }
-    // Also block if not active (but only if truly expired)
-    if (!isActive && isExpired && daysRemaining <= 0) {
-      return <PaymentRequired daysRemaining={daysRemaining} />;
+
+    // Paid plan expired — prompt renewal via mobile app
+    if (isPaidPlan && isExpired) {
+      return <PaymentRequired daysRemaining={daysRemaining} planId={planId} />;
     }
+
+    return <WebAccessBlocked />;
   }
   
   return <>{children}</>;
@@ -69,6 +78,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <CompanyProvider>
+        <SubscriptionProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/landing" element={<Landing />} />
@@ -92,6 +102,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
+        </SubscriptionProvider>
       </CompanyProvider>
     </TooltipProvider>
   </QueryClientProvider>

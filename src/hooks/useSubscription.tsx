@@ -1,18 +1,28 @@
-import { useState, useEffect } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { logger } from '@/lib/logger';
+import {
+  evaluateWebSubscriptionAccess,
+  pickActiveSubscription,
+  type SubscriptionRecord,
+  type WebSubscriptionAccess,
+} from '@/lib/subscriptionAccess';
+import type { SubscriptionPlanId } from '@/config/subscriptionPlans';
 
-export interface SubscriptionStatus {
-  isActive: boolean;
-  isExpired: boolean;
-  isTrial: boolean;
-  isReadOnly: boolean; // TRUE if expired or payment pending
-  daysRemaining: number;
+export interface SubscriptionStatus extends WebSubscriptionAccess {
   subscription: {
     id: string;
     subscription_type: string;
-    subscription_status: string; // Renamed status
+    subscription_status: string;
     start_date: string;
     end_date: string;
     payment_amount: number;
@@ -20,132 +30,122 @@ export interface SubscriptionStatus {
     plan_name: string;
   } | null;
   loading: boolean;
+  /** @deprecated Use isFreeMobile */
+  isTrial: boolean;
 }
 
-export const useSubscription = () => {
+const defaultStatus: SubscriptionStatus = {
+  planId: 'free_mobile',
+  planName: 'Free Mobile',
+  hasWebAccess: false,
+  isActive: false,
+  isExpired: true,
+  isFreeMobile: true,
+  isPaidPlan: false,
+  isReadOnly: true,
+  isTrial: true,
+  daysRemaining: 0,
+  paymentStatus: null,
+  subscription: null,
+  loading: true,
+};
+
+interface SubscriptionContextValue extends SubscriptionStatus {
+  refetch: () => Promise<void>;
+}
+
+const SubscriptionContext = createContext<SubscriptionContextValue | null>(null);
+
+export const SubscriptionProvider = ({ children }: { children: ReactNode }) => {
   const { user } = useAuth();
-  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>({
-    isActive: false,
-    isExpired: false,
-    isTrial: false,
-    isReadOnly: false,
-    daysRemaining: 0,
-    subscription: null,
-    loading: true
-  });
+  const [subscriptionStatus, setSubscriptionStatus] =
+    useState<SubscriptionStatus>(defaultStatus);
+
+  const checkSubscription = useCallback(async () => {
+    if (!user?.id) {
+      setSubscriptionStatus({ ...defaultStatus, loading: false });
+      return;
+    }
+
+    try {
+      try {
+        await (supabase as any).rpc('check_subscription_expiry');
+      } catch {
+        // RPC may not exist on older databases
+      }
+
+      const { data: subscriptions, error } = await (supabase as any)
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        logger.error('Error fetching subscription:', error);
+        setSubscriptionStatus({ ...defaultStatus, loading: false });
+        return;
+      }
+
+      const subscription = pickActiveSubscription(
+        (subscriptions as SubscriptionRecord[]) || []
+      );
+
+      const access = evaluateWebSubscriptionAccess(subscription);
+
+      setSubscriptionStatus({
+        ...access,
+        isTrial: access.isFreeMobile,
+        subscription: subscription
+          ? {
+              id: subscription.id!,
+              subscription_type: subscription.subscription_type || 'free_mobile',
+              subscription_status:
+                subscription.subscription_status || subscription.status || 'inactive',
+              start_date: subscription.start_date || '',
+              end_date: subscription.end_date || '',
+              payment_amount:
+                subscription.payment_amount ?? subscription.amount_paid ?? 0,
+              payment_status: subscription.payment_status || 'pending',
+              plan_name: subscription.plan_name || access.planName,
+            }
+          : null,
+        loading: false,
+      });
+    } catch (error) {
+      logger.error('Error checking subscription:', error);
+      setSubscriptionStatus({ ...defaultStatus, loading: false });
+    }
+  }, [user?.id]);
 
   useEffect(() => {
     if (user) {
       checkSubscription();
     } else {
-      setSubscriptionStatus(prev => ({ ...prev, loading: false, isActive: false }));
+      setSubscriptionStatus({ ...defaultStatus, loading: false });
     }
-  }, [user]);
+  }, [user, checkSubscription]);
 
-  const checkSubscription = async () => {
-    if (!user?.id) {
-      setSubscriptionStatus(prev => ({ ...prev, loading: false, isActive: false }));
-      return;
-    }
+  const value = useMemo(
+    () => ({
+      ...subscriptionStatus,
+      refetch: checkSubscription,
+    }),
+    [subscriptionStatus, checkSubscription]
+  );
 
-    try {
-      // First, run the expiry check function to update expired subscriptions
-      await (supabase as any).rpc('check_subscription_expiry');
-
-      // Get user's active subscription (must be active AND paid)
-      // Call the new RPC for unified status
-      const { data: statusJson, error: statusError } = await (supabase as any)
-        .rpc('get_subscription_status', { user_id_uuid: user.id });
-
-      // Also get full details for the UI
-      const { data: subscriptions, error } = await (supabase as any)
-        .from('subscriptions')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('end_date', { ascending: false })
-        .limit(1);
-      
-      const subscription = subscriptions && subscriptions.length > 0 ? subscriptions[0] : null;
-
-      if (error) {
-        logger.error('Error fetching subscription:', error);
-        setSubscriptionStatus({
-          isActive: false,
-          isExpired: true,
-          isTrial: false,
-          isReadOnly: true,
-          daysRemaining: 0,
-          subscription: null,
-          loading: false
-        });
-        return;
-      }
-
-      if (!subscription) {
-        // No subscription record found - block access
-        setSubscriptionStatus({
-          isActive: false,
-          isExpired: false,
-          isTrial: false,
-          isReadOnly: true,
-          daysRemaining: 0,
-          subscription: null,
-          loading: false
-        });
-        return;
-      }
-
-      // Check if subscription is expired
-      const endDateStr = (subscription as any).end_date.split('T')[0];
-      const endDate = new Date(endDateStr + 'T23:59:59');
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const isExpired = endDate < today;
-      const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
-      const isTrial = (subscription as any).subscription_type === 'trial';
-      
-      // Active if it's paid AND not expired
-      const isActive = !isExpired && (subscription as any).payment_status === 'paid';
-      
-      // READ-ONLY if expired OR pay status is not 'paid'
-      const isReadOnly = isExpired || (subscription as any).payment_status !== 'paid';
-
-      setSubscriptionStatus({
-        isActive,
-        isExpired,
-        isTrial,
-        isReadOnly,
-        daysRemaining,
-        subscription: {
-          id: (subscription as any).id,
-          subscription_type: (subscription as any).subscription_type,
-          subscription_status: (subscription as any).subscription_status,
-          start_date: (subscription as any).start_date,
-          end_date: (subscription as any).end_date,
-          payment_amount: (subscription as any).payment_amount,
-          payment_status: (subscription as any).payment_status,
-          plan_name: (subscription as any).plan_name || 'Annual'
-        },
-        loading: false
-      });
-    } catch (error) {
-      logger.error('Error checking subscription:', error);
-      setSubscriptionStatus({
-        isActive: false,
-        isExpired: true,
-        isTrial: false,
-        isReadOnly: true,
-        daysRemaining: 0,
-        subscription: null,
-        loading: false
-      });
-    }
-  };
-
-  return {
-    ...subscriptionStatus,
-    refetch: checkSubscription
-  };
+  return (
+    <SubscriptionContext.Provider value={value}>
+      {children}
+    </SubscriptionContext.Provider>
+  );
 };
 
+export const useSubscription = () => {
+  const context = useContext(SubscriptionContext);
+  if (!context) {
+    throw new Error('useSubscription must be used within SubscriptionProvider');
+  }
+  return context;
+};
+
+export type { SubscriptionPlanId };

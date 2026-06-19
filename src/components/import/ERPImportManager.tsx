@@ -333,45 +333,34 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
           });
         }
 
-        // Separate products with and without SKU
-        const productsWithSKU = productsWithUser.filter(p => p.sku);
-        const productsWithoutSKU = productsWithUser.filter(p => !p.sku);
-
-        let processedCount = 0;
-        let errors: string[] = [];
-
-        // Upsert products with SKU (update if exists, insert if not)
-        if (productsWithSKU.length > 0) {
-          const { error: upsertError } = await supabase
-            .from('products')
-            .upsert(productsWithSKU, {
-              onConflict: 'sku',
-              ignoreDuplicates: false
-            });
-
-          if (upsertError) {
-            errors.push(`Failed to import products with SKU: ${upsertError.message}`);
-          } else {
-            processedCount += productsWithSKU.length;
+        if (productsWithUser.length === 0) {
+          toast({
+            title: "No Products to Import",
+            description: "All rows were duplicates or invalid. Nothing new to import.",
+            variant: "default"
+          });
+          setCurrentStep('complete');
+          if (onImportComplete) {
+            onImportComplete();
           }
+          return;
         }
 
-        // Insert products without SKU normally
-        if (productsWithoutSKU.length > 0) {
-          const { error: insertError } = await supabase
-            .from('products')
-            .insert(productsWithoutSKU);
+        // Insert only — SKU uniqueness is scoped per user + company (not global upsert)
+        const { error: insertError } = await supabase
+          .from('products')
+          .insert(productsWithUser);
 
-          if (insertError) {
-            errors.push(`Failed to import products without SKU: ${insertError.message}`);
-          } else {
-            processedCount += productsWithoutSKU.length;
-          }
+        if (insertError) {
+          const hint =
+            insertError.message.includes('products_sku_key') ||
+            insertError.message.includes('duplicate key') && insertError.message.includes('sku')
+              ? ' Run the latest Supabase migration (scope_product_sku_per_user_company) so SKUs are unique per account/company, not globally.'
+              : '';
+          throw new Error(`Failed to import products: ${insertError.message}${hint}`);
         }
 
-        if (errors.length > 0) {
-          throw new Error(errors.join('; '));
-        }
+        const processedCount = productsWithUser.length;
 
         const skippedCount = products.length - uniqueProducts.length;
         let message = `Successfully imported ${processedCount} products`;

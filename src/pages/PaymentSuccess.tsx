@@ -6,105 +6,124 @@ import { CheckCircle, ArrowRight, Receipt, Calendar, IndianRupee, PartyPopper, L
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { useSubscription } from '@/hooks/useSubscription';
 import { logger } from '@/lib/logger';
 
 export default function PaymentSuccess() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const { refetch } = useSubscription();
   const [countdown, setCountdown] = useState(10);
   const [updating, setUpdating] = useState(true);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [activationComplete, setActivationComplete] = useState(false);
 
   const txnid = searchParams.get('txnid');
   const amount = searchParams.get('amount');
-  const mihpayid = searchParams.get('mihpayid'); // PayU transaction ID
+  const mihpayid = searchParams.get('mihpayid');
+  const planType = searchParams.get('udf2');
 
-  // Update subscription status on mount
   useEffect(() => {
+    if (authLoading) return;
+
     const updateSubscription = async () => {
       if (!user?.id) {
+        setUpdateError('Please sign in to activate your subscription, then open Subscription from the dashboard.');
         setUpdating(false);
         return;
       }
 
+      setUpdating(true);
+
       try {
-        // Find the pending subscription with this transaction ID
-        const { data: pendingSubscription, error: fetchError } = await (supabase as any)
+        let query = (supabase as any)
           .from('subscriptions')
           .select('*')
-          .eq('user_id', user.id)
-          .eq('status', 'pending')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .eq('user_id', user.id);
+
+        if (txnid) {
+          query = query.eq('transaction_id', txnid);
+        } else {
+          query = query.eq('status', 'pending').order('created_at', { ascending: false }).limit(1);
+        }
+
+        const { data: pendingSubscription, error: fetchError } = await query.maybeSingle();
 
         if (fetchError) {
           logger.error('Error fetching subscription:', fetchError);
           setUpdateError('Could not find your subscription. Please contact support.');
-          setUpdating(false);
           return;
         }
 
-        if (pendingSubscription) {
-          // Calculate proper dates
-          const startDate = new Date();
-          const endDate = new Date();
-          
-          if ((pendingSubscription as any).subscription_type === 'annual') {
-            endDate.setFullYear(endDate.getFullYear() + 1);
-          } else {
-            endDate.setMonth(endDate.getMonth() + 1);
-          }
-
-          // Update the subscription to active
-          const { error: updateError } = await (supabase as any)
-            .from('subscriptions')
-            .update({
-              status: 'active',
-              payment_status: 'paid',
-              payment_gateway: 'PayU',
-              plan_name: 'Annual Maintenance',
-              transaction_id: mihpayid || txnid || (pendingSubscription as any).transaction_id,
-              start_date: startDate.toISOString().split('T')[0],
-              end_date: endDate.toISOString().split('T')[0],
-              renewal_date: endDate.toISOString().split('T')[0],
-              notes: `PayU Payment successful. Transaction ID: ${mihpayid || txnid || 'N/A'}`,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', pendingSubscription.id);
-
-          if (updateError) {
-            logger.error('Error updating subscription:', updateError);
-            setUpdateError('Payment received but could not update subscription. Please contact support.');
-          }
-
-          // Update profile subscription status
-          await supabase
-            .from('profiles')
-            .update({ subscription_plan: 'paid' })
-            .eq('id', user.id);
+        if (!pendingSubscription) {
+          setUpdateError('Payment received but no matching subscription was found. Contact support with your transaction ID.');
+          return;
         }
+
+        const subType =
+          (pendingSubscription as { subscription_type?: string }).subscription_type ||
+          planType ||
+          'yearly';
+        const startDate = new Date();
+        const endDate = new Date();
+
+        if (subType === 'monthly') {
+          endDate.setMonth(endDate.getMonth() + 1);
+        } else {
+          endDate.setFullYear(endDate.getFullYear() + 1);
+        }
+
+        const { error: updateError } = await (supabase as any)
+          .from('subscriptions')
+          .update({
+            status: 'active',
+            payment_status: 'paid',
+            subscription_type: subType === 'annual' ? 'yearly' : subType,
+            transaction_id:
+              mihpayid || txnid || (pendingSubscription as { transaction_id?: string }).transaction_id,
+            start_date: startDate.toISOString().split('T')[0],
+            end_date: endDate.toISOString().split('T')[0],
+            renewal_date: endDate.toISOString().split('T')[0],
+            notes: `PayU payment successful. Transaction ID: ${mihpayid || txnid || 'N/A'}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', pendingSubscription.id);
+
+        if (updateError) {
+          logger.error('Error updating subscription:', updateError);
+          setUpdateError('Payment received but could not update subscription. Please contact support.');
+          return;
+        }
+
+        await supabase
+          .from('profiles')
+          .update({ subscription_plan: 'paid', subscription_status: 'active' })
+          .eq('id', user.id);
+
+        await refetch();
+        setActivationComplete(true);
       } catch (error) {
         logger.error('Error processing payment success:', error);
-        setUpdateError('An error occurred. Your payment was received - please contact support if your subscription is not active.');
+        setUpdateError(
+          'An error occurred. Your payment was received — please contact support if your subscription is not active.'
+        );
       } finally {
         setUpdating(false);
       }
     };
 
     updateSubscription();
-  }, [user?.id, txnid, mihpayid]);
+  }, [user?.id, authLoading, txnid, mihpayid, planType, refetch]);
 
-  // Auto-redirect countdown
   useEffect(() => {
-    if (updating) return; // Don't start countdown until update is complete
+    if (updating || !activationComplete) return;
 
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          navigate('/dashboard?tab=subscription');
+          navigate('/dashboard?tab=products');
           return 0;
         }
         return prev - 1;
@@ -112,9 +131,14 @@ export default function PaymentSuccess() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [navigate, updating]);
+  }, [navigate, updating, activationComplete]);
 
-  if (updating) {
+  const periodLabel =
+    planType === 'monthly' || searchParams.get('udf2') === 'monthly'
+      ? '1 Month'
+      : '1 Year';
+
+  if (authLoading || updating) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
         <Card className="w-full max-w-md border-primary/20 bg-card/95 backdrop-blur">
@@ -140,18 +164,18 @@ export default function PaymentSuccess() {
             Payment Successful!
           </CardTitle>
           <CardDescription className="text-muted-foreground">
-            Your subscription has been activated
+            {activationComplete
+              ? 'Your subscription has been activated'
+              : 'We received your payment'}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Error message if update failed */}
           {updateError && (
             <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 text-sm text-yellow-500">
               {updateError}
             </div>
           )}
 
-          {/* Transaction Details */}
           <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-4 space-y-3">
             {(txnid || mihpayid) && (
               <div className="flex items-center justify-between text-sm">
@@ -178,39 +202,37 @@ export default function PaymentSuccess() {
                 <Calendar className="h-4 w-4" />
                 Subscription Period
               </span>
-              <span className="font-medium">1 Year</span>
+              <span className="font-medium">{periodLabel}</span>
             </div>
           </div>
 
-          {/* Success Message */}
           <div className="text-center space-y-2">
             <p className="text-sm text-muted-foreground">
-              Thank you for your payment! Your subscription is now active for the next 12 months.
-            </p>
-            <p className="text-xs text-muted-foreground">
-              A confirmation email will be sent to your registered email address.
+              {activationComplete
+                ? `Thank you for your payment! Your subscription is now active for the next ${periodLabel.toLowerCase()}.`
+                : 'If features are still locked, open Subscription and click Refresh, or contact support.'}
             </p>
           </div>
 
-          {/* Auto-redirect Notice */}
-          <div className="text-center text-xs text-muted-foreground">
-            Redirecting to dashboard in <span className="font-bold text-primary">{countdown}</span> seconds...
-          </div>
+          {activationComplete && (
+            <div className="text-center text-xs text-muted-foreground">
+              Redirecting to products in{' '}
+              <span className="font-bold text-primary">{countdown}</span> seconds...
+            </div>
+          )}
 
-          {/* Action Button */}
           <Button
-            onClick={() => navigate('/dashboard?tab=subscription')}
+            onClick={() => navigate('/dashboard?tab=products')}
             className="w-full bg-green-600 hover:bg-green-700"
           >
             Go to Dashboard
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
 
-          {/* Support Link */}
           <p className="text-center text-xs text-muted-foreground">
             Need help? Contact us at{' '}
-            <a 
-              href="mailto:retailmarketingpro1.0@gmail.com" 
+            <a
+              href="mailto:retailmarketingpro1.0@gmail.com"
               className="text-primary hover:underline"
             >
               retailmarketingpro1.0@gmail.com
