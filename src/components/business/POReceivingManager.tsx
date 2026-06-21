@@ -84,10 +84,10 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
       
       setPOItems(data || []);
       
-      // Initialize receiving items with current received quantities
+      // New quantities to receive in this session (not cumulative received)
       const initialReceiving: {[key: string]: number} = {};
       (data || []).forEach(item => {
-        initialReceiving[item.id] = item.received_quantity || 0;
+        initialReceiving[item.id] = 0;
       });
       setReceivingItems(initialReceiving);
     } catch (error) {
@@ -240,12 +240,24 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
         }
 
         // Update inventory if product exists
-        if (item.product_id && item.product) {
-          const newStock = item.product.current_stock + receivingItems[item.id];
-          
+        if (item.product_id) {
+          const receiveQty = receivingItems[item.id] || 0;
+          if (receiveQty <= 0) continue;
+
+          const { data: product, error: productError } = await supabase
+            .from('products')
+            .select('current_stock, name')
+            .eq('id', item.product_id)
+            .single();
+
+          if (productError || !product) {
+            logger.error('Error fetching product stock:', productError);
+            throw new Error(`Failed to fetch stock for "${item.description}"`);
+          }
+
           const { error: inventoryError } = await supabase
             .from('products')
-            .update({ current_stock: newStock })
+            .update({ current_stock: product.current_stock + receiveQty })
             .eq('id', item.product_id);
 
           if (inventoryError) {

@@ -33,6 +33,19 @@ import { ReportPDF } from '@/components/pdf/ReportPDF';
 import { pdf } from '@react-pdf/renderer';
 import { downloadReportAsCSV } from '@/utils/pdfGenerator';
 import { logger } from '@/lib/logger';
+import {
+  fetchPurchaseOrdersForReport,
+  mapPurchaseOrdersToReportRows,
+  sumPurchaseOrderSubtotals,
+  sumPurchaseOrderTax,
+  sumPurchaseOrderTotals,
+} from '@/lib/purchaseOrderReports';
+import {
+  generateBalanceSheetFromLedger,
+  generateLedgerSummaryFromLedger,
+  generateProfitAndLossFromLedger,
+  generateTrialBalanceFromLedger,
+} from '@/services/ledgerReportService';
 import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
 import { GSTSyncService } from '@/services/gstSyncService';
 import { getCurrentFinancialYear } from '@/utils/indianBusiness';
@@ -257,538 +270,32 @@ export const ReportsManager: React.FC = () => {
 
       switch (selectedReport) {
         case 'profit-loss': {
-          // Fetch all sales invoices (for sales account) within the reporting period
-          const { data: allSalesInvoices, error: salesError } = await (supabase as any).from('invoices')
-            .select('id, subtotal, tax_amount, total_amount, invoice_date')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'sales')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo);
-
-          if (salesError) {
-            logger.error('Error fetching sales invoices:', salesError);
-          }
-
-          // Fetch sale return invoices in the reporting period
-          const { data: saleReturns } = await (supabase as any).from('invoices')
-            .select('id, subtotal, tax_amount, total_amount, invoice_date')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'sale_return')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo);
-
-          // Fetch purchase invoices in the reporting period
-          const { data: purchaseInvoices, error: purchaseError } = await (supabase as any).from('invoices')
-            .select('id, subtotal, tax_amount, total_amount, invoice_date')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'purchase')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo);
-
-          if (purchaseError) {
-            logger.error('Error fetching purchase invoices:', purchaseError);
-          }
-
-          // Fetch purchase return invoices in the reporting period
-          const { data: purchaseReturns } = await (supabase as any).from('invoices')
-            .select('id, subtotal, tax_amount, total_amount, invoice_date')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'purchase_return')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo);
-
-          // Fetch invoices AFTER the reporting period for backwards stock calculation
-          const { data: salesAfterPeriod } = await (supabase as any).from('invoices')
-            .select('id')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'sales')
-            .gt('invoice_date', dateTo);
-
-          const { data: saleReturnsAfterPeriod } = await (supabase as any).from('invoices')
-            .select('id')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'sale_return')
-            .gt('invoice_date', dateTo);
-
-          const { data: purchaseInvoicesAfterPeriod } = await (supabase as any).from('invoices')
-            .select('id')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'purchase')
-            .gt('invoice_date', dateTo);
-
-          const { data: purchaseReturnsAfterPeriod } = await (supabase as any).from('invoices')
-            .select('id')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'purchase_return')
-            .gt('invoice_date', dateTo);
-
-          // Fetch labour invoices (potential direct inventory expenses)
-          const { data: labourInvoices } = await (supabase as any).from('invoices')
-            .select('subtotal, tax_amount, total_amount, invoice_date, entity_type')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('entity_type', 'labour')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo);
-
-          // Fetch transport invoices (potential direct inventory expenses)
-          const { data: transportInvoices } = await (supabase as any).from('invoices')
-            .select('subtotal, tax_amount, total_amount, invoice_date, entity_type')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('entity_type', 'transport')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo);
-
-          // Fetch sales invoice IDs first
-          const salesInvoiceIds = (allSalesInvoices || []).map(inv => inv.id);
-          
-          // Fetch sales invoice items to calculate quantity sold for closing stock (period only)
-          let salesInvoiceItems: any[] = [];
-          if (salesInvoiceIds.length > 0) {
-            const { data: itemsData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', salesInvoiceIds);
-            salesInvoiceItems = itemsData || [];
-          }
-
-          // Fetch purchase invoice items for closing stock calculation (debits, period only)
-          let purchaseInvoiceItems: any[] = [];
-          const purchaseInvoiceIds = (purchaseInvoices || []).map(inv => inv.id);
-          if (purchaseInvoiceIds.length > 0) {
-            const { data: purchaseItemsData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', purchaseInvoiceIds);
-            purchaseInvoiceItems = purchaseItemsData || [];
-          }
-
-          // Fetch sale return items (credits - increase stock, period only)
-          let saleReturnItems: any[] = [];
-          const saleReturnIds = (saleReturns || []).map(inv => inv.id);
-          if (saleReturnIds.length > 0) {
-            const { data: returnItemsData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', saleReturnIds);
-            saleReturnItems = returnItemsData || [];
-          }
-
-          // Fetch purchase return items (debits - decrease stock, period only)
-          let purchaseReturnItems: any[] = [];
-          const purchaseReturnIds = (purchaseReturns || []).map(inv => inv.id);
-          if (purchaseReturnIds.length > 0) {
-            const { data: purchaseReturnItemsData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', purchaseReturnIds);
-            purchaseReturnItems = purchaseReturnItemsData || [];
-          }
-
-          // Fetch items AFTER the reporting period
-          let salesInvoiceItemsAfterPeriod: any[] = [];
-          const salesAfterIds = (salesAfterPeriod || []).map(inv => inv.id);
-          if (salesAfterIds.length > 0) {
-            const { data: itemsBeforeData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', salesAfterIds);
-            salesInvoiceItemsAfterPeriod = itemsBeforeData || [];
-          }
-
-          let saleReturnItemsAfterPeriod: any[] = [];
-          const saleReturnsAfterIds = (saleReturnsAfterPeriod || []).map(inv => inv.id);
-          if (saleReturnsAfterIds.length > 0) {
-            const { data: returnItemsBeforeData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', saleReturnsAfterIds);
-            saleReturnItemsAfterPeriod = returnItemsBeforeData || [];
-          }
-
-          let purchaseInvoiceItemsAfterPeriod: any[] = [];
-          const purchaseAfterIds = (purchaseInvoicesAfterPeriod || []).map(inv => inv.id);
-          if (purchaseAfterIds.length > 0) {
-            const { data: purchaseItemsBeforeData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', purchaseAfterIds);
-            purchaseInvoiceItemsAfterPeriod = purchaseItemsBeforeData || [];
-          }
-
-          let purchaseReturnItemsAfterPeriod: any[] = [];
-          const purchaseReturnsAfterIds = (purchaseReturnsAfterPeriod || []).map(inv => inv.id);
-          if (purchaseReturnsAfterIds.length > 0) {
-            const { data: purchaseReturnItemsBeforeData } = await (supabase as any).from('invoice_items')
-              .select('quantity, unit_price, product_id, invoice_id')
-              .in('invoice_id', purchaseReturnsAfterIds);
-            purchaseReturnItemsAfterPeriod = purchaseReturnItemsBeforeData || [];
-          }
-
-          // Helper to aggregate quantities per product
-          const createQtyMap = (items: any[]) => {
-            const map = new Map<string, number>();
-            (items || []).forEach((item: any) => {
-              const productId = String(item.product_id);
-              const qty = Number(item.quantity) || 0;
-              map.set(productId, (map.get(productId) || 0) + qty);
+          try {
+            const { data: { user: plUser } } = await supabase.auth.getUser();
+            if (!plUser?.id) throw new Error('User not authenticated');
+            const pl = await generateProfitAndLossFromLedger({
+              companyName: selectedCompany.company_name,
+              userId: plUser.id,
+              dateFrom,
+              dateTo,
             });
-            return map;
-          };
-
-          // Quantity movements AFTER the reporting period (to derive closing stock)
-          const salesAfterQtyMap = createQtyMap(salesInvoiceItemsAfterPeriod);
-          const saleReturnsAfterQtyMap = createQtyMap(saleReturnItemsAfterPeriod);
-          const purchaseAfterQtyMap = createQtyMap(purchaseInvoiceItemsAfterPeriod);
-          const purchaseReturnsAfterQtyMap = createQtyMap(purchaseReturnItemsAfterPeriod);
-
-          // Quantity movements inside the reporting period (to derive closing stock at period end)
-          const salesPeriodQtyMap = createQtyMap(salesInvoiceItems);
-          const saleReturnsPeriodQtyMap = createQtyMap(saleReturnItems);
-          const purchasePeriodQtyMap = createQtyMap(purchaseInvoiceItems);
-          const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
-
-          // Fetch all products (including imported opening stock quantity used for first-period opening stock)
-          let { data: products, error: productsError } = await (supabase as any)
-            .from('products')
-            .select('id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value')
-            .eq('company_id', selectedCompany.company_name);
-
-          if (productsError) {
-            logger.error('Error fetching products for opening/closing stock:', productsError);
-          }
-
-          if (productsError) {
-            logger.error('Error fetching products for opening/closing stock:', productsError);
-          }
-
-          // Calculate Opening and Closing Stock by rolling back from current_stock
-          // using movements inside and after the reporting period.
-          let openingStockValue = 0;
-          let closingStockValue = 0;
-
-          (products || []).forEach((product: any) => {
-            const productId = String(product.id);
-            const currentStock = Number(product.current_stock) || 0;
-
-            // Base purchase cost per unit
-            let costPerUnit = Number(product.purchase_price) || 0;
-
-            if (!costPerUnit || Number.isNaN(costPerUnit)) {
-              costPerUnit = 0;
-            }
-
-            // Movements IN the period
-            const movementsInPeriod =
-              (purchasePeriodQtyMap.get(productId) || 0) -
-              (purchaseReturnsPeriodQtyMap.get(productId) || 0) -
-              (salesPeriodQtyMap.get(productId) || 0) +
-              (saleReturnsPeriodQtyMap.get(productId) || 0);
-
-            // Movements AFTER the period
-            const movementsAfter =
-              (purchaseAfterQtyMap.get(productId) || 0) -
-              (purchaseReturnsAfterQtyMap.get(productId) || 0) -
-              (salesAfterQtyMap.get(productId) || 0) +
-              (saleReturnsAfterQtyMap.get(productId) || 0);
-
-            // Closing stock = current_stock - movementsAfter
-            const closingQtyForPeriod = currentStock - movementsAfter;
-            
-            // Opening stock = closing_stock - movementsInPeriod
-            const openingQtyForPeriod = closingQtyForPeriod - movementsInPeriod;
-
-            openingStockValue += Math.max(0, openingQtyForPeriod) * costPerUnit;
-            closingStockValue += Math.max(0, closingQtyForPeriod) * costPerUnit;
-          });;
-
-          if ((products || []).length === 0) {
+            sampleData = pl.rows;
+            newSummary = {
+              ...pl.summary,
+              saleReturns: 0,
+              purchaseReturns: 0,
+            };
+          } catch (error: any) {
+            logger.error('P&L from ledger error:', error);
             toast({
-              title: "Inventory not found",
-              description:
-                "No products found at all, so Opening/Closing Stock will be 0. Please ensure products were created/imported.",
-              variant: "default",
+              title: 'Error',
+              description: error.message || 'Failed to generate P&L from ledger',
+              variant: 'destructive',
             });
           }
-
-          const openingStockCost = openingStockValue;
-          const closingStock = closingStockValue;
-
-          // Calculate purchases and returns (base values only, excluding GST)
-          const totalPurchases =
-            purchaseInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-          const totalPurchaseReturns =
-            purchaseReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-          const netPurchases = totalPurchases - totalPurchaseReturns;
-          
-          const purchaseTax =
-            purchaseInvoices?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
-          const purchaseReturnTax =
-            purchaseReturns?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
-          const netPurchaseTax = purchaseTax - purchaseReturnTax;
-          
-          // Total inventory-related tax for reference (not used directly in COGS)
-          const totalInventoryCostWithTax = openingStockCost + netPurchaseTax;
-
-          // Calculate sales and returns (revenue side)
-          const totalSales =
-            allSalesInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-          const totalSaleReturns =
-            saleReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-          const netSales = totalSales - totalSaleReturns;
-          
-          const salesTax =
-            allSalesInvoices?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
-          const saleReturnTax =
-            saleReturns?.reduce((sum, inv) => sum + (inv.tax_amount || 0), 0) || 0;
-          const netSalesTax = salesTax - saleReturnTax;
-          
-          // Calculate total inventory selling price with tax (for reference)
-          const totalInventorySellingWithTax = (products || []).reduce((sum, product) => {
-            const stock = product.current_stock || 0;
-            const sellingPrice = product.selling_price || 0;
-            const gstRate = product.gst_rate || 18; // Get GST rate from product
-            const taxAmount = stock * sellingPrice * (gstRate / 100);
-            return sum + stock * sellingPrice + taxAmount;
-          }, 0);
-
-          // Calculate direct expenses to be included in COGS (base amounts only, excluding GST).
-          // Examples: freight inward, loading/unloading, labour tied directly to inventory.
-          const labourDirectBase =
-            (labourInvoices || []).reduce(
-              (sum, inv) => sum + (inv.subtotal || 0),
-              0
-            ) || 0;
-          const transportDirectBase =
-            (transportInvoices || []).reduce(
-              (sum, inv) => sum + (inv.subtotal || 0),
-              0
-            ) || 0;
-          const directExpenses = labourDirectBase + transportDirectBase;
-
-          // Still keep the full (with-tax) values for disclosure in the report if needed.
-          const labourExpenses =
-            (labourInvoices || []).reduce(
-              (sum, inv) => sum + (inv.total_amount || 0),
-              0
-            ) || 0;
-          const transportExpenses =
-            (transportInvoices || []).reduce(
-              (sum, inv) => sum + (inv.total_amount || 0),
-              0
-            ) || 0;
-          
-          // Calculate sales discounts (indirect expenses)
-          // Include both discount_amount and discount_percentage
-          let salesDiscounts = 0;
-          (allSalesInvoices || []).forEach(inv => {
-            let invoiceDiscount = 0;
-            const subtotal = inv.subtotal || 0;
-            
-            // Add flat discount amount
-            if (inv.discount_amount) {
-              invoiceDiscount += inv.discount_amount;
-            }
-            
-            // Add percentage discount on remaining amount after flat discount
-            if (inv.discount_percentage && inv.discount_percentage > 0) {
-              const remainingAfterFlat = Math.max(0, subtotal - invoiceDiscount);
-              const percentageDiscount = (remainingAfterFlat * inv.discount_percentage) / 100;
-              invoiceDiscount += percentageDiscount;
-            }
-            
-            salesDiscounts += invoiceDiscount;
-          });
-          
-          // Calculate purchase discounts (indirect income)
-          // Include both discount_amount and discount_percentage
-          let purchaseDiscounts = 0;
-          (purchaseInvoices || []).forEach(inv => {
-            let invoiceDiscount = 0;
-            const subtotal = inv.subtotal || 0;
-            
-            // Add flat discount amount
-            if (inv.discount_amount) {
-              invoiceDiscount += inv.discount_amount;
-            }
-            
-            // Add percentage discount on remaining amount after flat discount
-            if (inv.discount_percentage && inv.discount_percentage > 0) {
-              const remainingAfterFlat = Math.max(0, subtotal - invoiceDiscount);
-              const percentageDiscount = (remainingAfterFlat * inv.discount_percentage) / 100;
-              invoiceDiscount += percentageDiscount;
-            }
-            
-            purchaseDiscounts += invoiceDiscount;
-          });
-          
-          // Indirect expenses are things that do NOT form part of inventory cost
-          // (here we treat only sales discounts and ledger-mapped expenses as indirect).
-          const indirectExpenses = salesDiscounts;
-
-          // Fetch ledger entries for indirect income (income and expense ledgers)
-          const { data: { user } } = await supabase.auth.getUser();
-          
-          if (!user?.id) {
-            logger.warn('No user ID found for ledger entries query');
-          }
-          
-          // First get ledger IDs for the company
-          const { data: companyLedgers, error: ledgersError } = await (supabase as any).from('ledgers')
-            .select('id, ledger_type')
-            .eq('company_id', selectedCompany.company_name);
-          
-          if (ledgersError) {
-            logger.error('Error fetching ledgers for company:', ledgersError);
-          }
-          
-          const ledgerIds = (companyLedgers || []).map(l => l.id);
-          const ledgerTypeMap = new Map((companyLedgers || []).map(l => [l.id, l.ledger_type]));
-          
-          console.log(`Found ${ledgerIds.length} ledgers for company ${selectedCompany.company_name}`);
-          
-          // Then get ledger entries for those ledgers
-          // Use a join query to ensure we only get entries for ledgers that belong to this company
-          let ledgerEntries: any[] = [];
-          if (ledgerIds.length > 0 && user?.id) {
-            const { data: entriesData, error: entriesError } = await (supabase as any).from('ledger_entries')
-              .select('debit_amount, credit_amount, ledger_id, entry_date')
-              .in('ledger_id', ledgerIds)
-              .eq('user_id', user.id)
-              .gte('entry_date', dateFrom)
-              .lte('entry_date', dateTo);
-            
-            if (entriesError) {
-              logger.error('Error fetching ledger entries:', entriesError);
-            } else {
-              console.log(`Found ${(entriesData || []).length} ledger entries in date range`);
-            }
-            
-            // Add ledger type to each entry
-            // Note: The calculation below will handle filtering by ledger_type (income/expense)
-            ledgerEntries = (entriesData || []).map(entry => ({
-              ...entry,
-              ledger_type: ledgerTypeMap.get(entry.ledger_id)
-            }));
-          } else if (ledgerIds.length === 0) {
-            logger.warn('No ledgers found for company, cannot fetch ledger entries');
-          } else if (!user?.id) {
-            logger.warn('No user ID, cannot fetch ledger entries');
-          }
-
-          // Calculate indirect income and expenses from ledgers separately
-          // Include all ledger types with appropriate mapping rules:
-          // - income: credit = income, debit = expense reduction
-          // - expense: debit = expense, credit = expense reduction
-          // - cash: credit = income (receipts), debit = expense (payments)
-          // - bank: credit = income (deposits), debit = expense (withdrawals)
-          // - receivables: credit = income (collections), debit = expense (write-offs)
-          // - payables: debit = expense (payments), credit = income (reversals)
-          let indirectIncome = (ledgerEntries || []).reduce((sum, entry) => {
-            const ledgerType = entry.ledger_type?.toLowerCase();
-            const credit = entry.credit_amount || 0;
-            const debit = entry.debit_amount || 0;
-            
-            switch (ledgerType) {
-              case 'income':
-                // For income: credit is income, debit is reversal/refund
-                return sum + (credit - debit);
-              case 'cash':
-              case 'bank':
-                // Credit = income (receipts/deposits)
-                return sum + credit;
-              case 'receivables':
-                // Credit = income (collections)
-                return sum + credit;
-              case 'payables':
-                // Credit = income (reversals)
-                return sum + credit;
-              default:
-                return sum;
-            }
-          }, 0);
-          
-          // Add purchase discounts to indirect income
-          indirectIncome += purchaseDiscounts;
-          
-          const indirectExpensesFromLedgers = (ledgerEntries || []).reduce((sum, entry) => {
-            const ledgerType = entry.ledger_type?.toLowerCase();
-            const credit = entry.credit_amount || 0;
-            const debit = entry.debit_amount || 0;
-            
-            switch (ledgerType) {
-              case 'expense':
-              case 'expenses': // Support both for backward compatibility
-                // For expenses: debit is expense, credit is reversal/refund
-                return sum + (debit - credit);
-              case 'cash':
-              case 'bank':
-                // Debit = expense (payments/withdrawals)
-                return sum + debit;
-              case 'receivables':
-                // Debit = expense (write-offs)
-                return sum + debit;
-              case 'payables':
-                // Debit = expense (payments)
-                return sum + debit;
-              default:
-                return sum;
-            }
-          }, 0);
-          
-          // Total indirect expenses = sales discounts + ledger expenses
-          const totalIndirectExpenses = indirectExpenses + indirectExpensesFromLedgers;
-
-          // Cost of Goods Sold (Trading Account):
-          // COGS = Opening Stock + Net Purchases + Direct Expenses − Closing Stock
-          const effectiveCOGS = openingStockCost + netPurchases + directExpenses - closingStock;
-          
-          // Calculate gross profit with net sales
-          const grossProfit = netSales - effectiveCOGS;
-          
-          // Calculate net profit (with indirect income and expenses)
-          // Net Profit = Gross Profit - Indirect Expenses + Indirect Income
-          // Note: Tax difference (netSalesTax - netPurchaseTax) is already accounted for in the gross profit calculation
-          // Sales tax collected increases revenue, purchase tax paid increases expenses
-          const netProfit = grossProfit - totalIndirectExpenses + indirectIncome;
-
-          console.log('P&L Report - Net Sales:', netSales, '(Sales:', totalSales, '- Returns:', totalSaleReturns, ') Net Purchases:', netPurchases, '(Purchases:', totalPurchases, '- Returns:', totalPurchaseReturns, ') Opening:', openingStockCost, 'Closing:', closingStock, 'COGS:', effectiveCOGS, 'Indirect Exp (invoices):', indirectExpenses, 'Indirect Exp (ledgers):', indirectExpensesFromLedgers, 'Total Indirect Exp:', totalIndirectExpenses, 'Indirect Income:', indirectIncome, 'Gross Profit:', grossProfit, 'Net Profit:', netProfit);
-
-          sampleData = [
-            { subcategory: 'Sales Account (All Sales Invoices)', amount: totalSales, category: 'Revenue' },
-            { subcategory: 'Less: Sale Returns', amount: -totalSaleReturns, category: 'Revenue' },
-            { subcategory: 'Net Sales', amount: netSales, category: 'Revenue' },
-            { subcategory: 'Opening Stock', amount: openingStockCost, category: 'Cost of Goods Sold' },
-            { subcategory: 'Purchase Account', amount: totalPurchases, category: 'Cost of Goods Sold' },
-            { subcategory: 'Less: Purchase Returns', amount: -totalPurchaseReturns, category: 'Cost of Goods Sold' },
-            { subcategory: 'Net Purchases', amount: netPurchases, category: 'Cost of Goods Sold' },
-            { subcategory: 'Direct Expenses - Labour (Base, excl. GST)', amount: labourDirectBase, category: 'Cost of Goods Sold' },
-            { subcategory: 'Direct Expenses - Transport (Base, excl. GST)', amount: transportDirectBase, category: 'Cost of Goods Sold' },
-            { subcategory: 'Total Direct Expenses (Base)', amount: directExpenses, category: 'Cost of Goods Sold' },
-            { subcategory: 'Less: Closing Stock', amount: -closingStock, category: 'Cost of Goods Sold' },
-            { subcategory: 'Cost of Goods Sold', amount: effectiveCOGS, category: 'Cost of Goods Sold' },
-            { subcategory: '', amount: grossProfit, category: 'Gross Profit' },
-            { subcategory: 'Sales Discounts', amount: salesDiscounts, category: 'Indirect Expenses' },
-            { subcategory: 'Indirect Expenses (Ledger)', amount: indirectExpensesFromLedgers, category: 'Indirect Expenses' },
-            { subcategory: 'Total Indirect Expenses', amount: totalIndirectExpenses, category: 'Indirect Expenses' },
-            { subcategory: 'Purchase Discounts', amount: purchaseDiscounts, category: 'Indirect Income' },
-            { subcategory: 'Indirect Income (Ledger)', amount: indirectIncome - purchaseDiscounts, category: 'Indirect Income' },
-            { subcategory: 'Total Indirect Income', amount: indirectIncome, category: 'Indirect Income' },
-            { subcategory: 'Net Sales Tax Collected', amount: netSalesTax, category: 'Taxes' },
-            { subcategory: 'Net Purchase Tax Paid', amount: netPurchaseTax, category: 'Taxes' },
-            { subcategory: 'Total Inventory Selling Price (with Tax)', amount: totalInventorySellingWithTax, category: 'Net Profit' },
-            { subcategory: '', amount: netProfit, category: 'Net Profit' }
-          ];
-          newSummary = {
-            totalSales: netSales,
-            totalPurchases: netPurchases,
-            grossProfit,
-            netProfit,
-            saleReturns: totalSaleReturns,
-            purchaseReturns: totalPurchaseReturns,
-            openingStock: openingStockCost,
-            closingStock: closingStock,
-            cogs: effectiveCOGS,
-            directExpenses: directExpenses,
-            indirectExpenses: totalIndirectExpenses,
-            indirectIncome: indirectIncome,
-            salesDiscounts: salesDiscounts
-          };
           break;
         }
-        
+
         case 'sales-report': {
           // Fetch sales invoices
           const { data: salesData, error: salesDataError } = await (supabase as any).from('invoices')
@@ -907,32 +414,13 @@ export const ReportsManager: React.FC = () => {
         }
 
         case 'purchase-report': {
-          // Fetch purchase orders
-          const { data: purchaseOrders, error: poError } = await (supabase as any).from('purchase_orders')
-            .select(`
-              po_number,
-              order_date,
-              subtotal,
-              tax_amount,
-              total_amount,
-              status,
-              suppliers(company_name),
-              purchase_order_items(
-                description,
-                quantity,
-                unit_price,
-                line_total,
-                received_quantity
-              )
-            `)
-            .eq('company_id', selectedCompany.company_name)
-            .gte('order_date', dateFrom)
-            .lte('order_date', dateTo)
-            .order('order_date', { ascending: false });
-
-          if (poError) {
-            logger.error('Error fetching purchase orders:', poError);
-          }
+          const { data: { user: reportUser } } = await supabase.auth.getUser();
+          const purchaseOrders = await fetchPurchaseOrdersForReport({
+            companyName: selectedCompany.company_name,
+            dateFrom,
+            dateTo,
+            userId: reportUser?.id,
+          });
 
           // Fetch purchase invoices
           const { data: purchaseInvoices, error: invoiceError } = await (supabase as any).from('invoices')
@@ -988,30 +476,7 @@ export const ReportsManager: React.FC = () => {
           }
 
           // Map purchase orders
-          const poRows = (purchaseOrders || []).map(po => {
-            const items = po.purchase_order_items || [];
-            const totalItems = items.length;
-            const totalQuantity = items.reduce((sum: number, item: any) => sum + (item.quantity || 0), 0);
-            const receivedQuantity = items.reduce((sum: number, item: any) => sum + (item.received_quantity || 0), 0);
-            
-            return {
-              subcategory: po.po_number || '',
-              amount: po.total_amount || 0,
-              category: new Date(po.order_date).toLocaleDateString('en-IN'),
-              po_number: po.po_number,
-              invoice_number: po.po_number,
-              invoice_date: po.order_date,
-              supplier: po.suppliers?.company_name || 'N/A',
-              subtotal: po.subtotal || 0,
-              tax_amount: po.tax_amount || 0,
-              status: po.status || 'draft',
-              payment_status: po.status || 'draft',
-              total_items: totalItems,
-              total_quantity: totalQuantity,
-              received_quantity: receivedQuantity,
-              record_type: 'PO'
-            };
-          });
+          const poRows = mapPurchaseOrdersToReportRows(purchaseOrders);
 
           // Map purchase invoices
           const purchaseInvoiceRows = (purchaseInvoices || []).map(inv => ({
@@ -1045,15 +510,15 @@ export const ReportsManager: React.FC = () => {
           sampleData = [...poRows, ...purchaseInvoiceRows, ...purchaseReturnRows];
 
           // Calculate totals
-          const totalPO = (purchaseOrders || []).reduce((sum, po) => sum + (po.subtotal || 0), 0);
+          const totalPO = sumPurchaseOrderSubtotals(purchaseOrders);
           const totalPurchases = (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
           const totalPurchaseReturns = (purchaseReturns || []).reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
           
-          const totalTax = (purchaseOrders || []).reduce((sum, po) => sum + (po.tax_amount || 0), 0) +
+          const totalTax = sumPurchaseOrderTax(purchaseOrders) +
                           (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.tax_amount || 0), 0);
           const totalReturnTax = (purchaseReturns || []).reduce((sum, inv) => sum + (inv.tax_amount || 0), 0);
           
-          const totalAmount = (purchaseOrders || []).reduce((sum, po) => sum + (po.total_amount || 0), 0) +
+          const totalAmount = sumPurchaseOrderTotals(purchaseOrders) +
                              (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
           const totalReturnAmount = (purchaseReturns || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
 
@@ -1209,283 +674,52 @@ export const ReportsManager: React.FC = () => {
 
         case 'trial-balance': {
           try {
-            // Fetch ledgers for the selected company with ledger entries for period transactions
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user?.id) {
-              toast({
-                title: "Error",
-                description: "User not authenticated",
-                variant: "destructive"
-              });
-              throw new Error('User not authenticated');
-            }
-
-            // Derive financial year from the report start date (dateFrom),
-            // so a user running older period reports still gets the correct FY partition.
-            const fromDateObj = new Date(dateFrom);
-            const fyUtils = Number.isNaN(fromDateObj.getTime())
-              ? getCurrentFinancialYear()
-              : getFinancialYearForDate(fromDateObj);
-            const financialYearLabel = fyUtils.label;
-
-            const { data: ledgersData, error: ledgersError } = await (supabase as any).from('ledgers')
-              .select('id, name, ledger_type, current_balance, opening_balance')
-              .eq('company_id', selectedCompany.company_name)
-              .eq('user_id', user.id)
-              .eq('financial_year', financialYearLabel);
-
-            if (ledgersError) {
-              logger.error('Error fetching ledgers:', ledgersError);
-              throw ledgersError;
-            }
-
-            // Initialize with empty array if no ledgers found
-            const ledgers = ledgersData || [];
-            const ledgerIds = ledgers.map(l => l.id);
-            let periodEntriesMap = new Map<string, { debits: number; credits: number; legacy: number }>();
-            let prePeriodEntriesMap = new Map<string, { debits: number; credits: number }>();
-            
-            // Fetch ledger entries for the period to calculate debits and credits.
-            // Also fetch entries *before* dateFrom (within the same FY) to compute opening-as-of-dateFrom.
-            if (ledgerIds.length > 0) {
-              const { data: entriesData, error: entriesError } = await (supabase as any).from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount, transaction_id, entry_date')
-                .in('ledger_id', ledgerIds)
-                .eq('user_id', user.id)
-                .eq('financial_year', financialYearLabel)
-                .gte('entry_date', dateFrom)
-                .lte('entry_date', dateTo);
-
-              if (entriesError) {
-                logger.error('Error fetching ledger entries:', entriesError);
-                // Continue with empty entries if fetch fails
-              } else {
-                (entriesData || []).forEach(entry => {
-                  const ledgerId = entry.ledger_id;
-                  const current = periodEntriesMap.get(ledgerId) || { debits: 0, credits: 0, legacy: 0 };
-                  periodEntriesMap.set(ledgerId, {
-                    debits: current.debits + (Number(entry.debit_amount) || 0),
-                    credits: current.credits + (Number(entry.credit_amount) || 0),
-                    legacy: current.legacy + (!entry.transaction_id ? 1 : 0),
-                  });
-                });
-              }
-
-              // Pre-period entries (for opening-as-of-dateFrom)
-              const { data: preData, error: preError } = await (supabase as any).from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount, entry_date')
-                .in('ledger_id', ledgerIds)
-                .eq('user_id', user.id)
-                .eq('financial_year', financialYearLabel)
-                .gte('entry_date', fyUtils.start.toISOString().split('T')[0])
-                .lt('entry_date', dateFrom);
-
-              if (preError) {
-                logger.error('Error fetching pre-period ledger entries:', preError);
-              } else {
-                (preData || []).forEach((entry: any) => {
-                  const ledgerId = entry.ledger_id;
-                  const current = prePeriodEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
-                  prePeriodEntriesMap.set(ledgerId, {
-                    debits: current.debits + (Number(entry.debit_amount) || 0),
-                    credits: current.credits + (Number(entry.credit_amount) || 0),
-                  });
-                });
-              }
-            }
-
-            // Calculate all ledgers with opening, debits, credits, and closing balance
-            sampleData = ledgers.map((l: any) => {
-              const entries = periodEntriesMap.get(l.id) || { debits: 0, credits: 0, legacy: 0 };
-              const preEntries = prePeriodEntriesMap.get(l.id) || { debits: 0, credits: 0 };
-              const baseOpening = Number(l.opening_balance) || 0;
-              const debits = Number(entries.debits) || 0;
-              const credits = Number(entries.credits) || 0;
-              
-              // Determine account type for proper balance calculation based on accounting rules
-              // Credit balance accounts: Capital, Equity, Loan, Payables, Liability, Income, Revenue, Sundry Creditor
-              // Debit balance accounts: Assets, Expenses, Cash, Bank, Receivables, Fixed Assets, Sundry Debtor
-              const ledgerTypeLower = (l.ledger_type || '').toLowerCase();
-              const isCreditBalanceAccount = [
-                'capital', 'equity', 'loan', 'payables', 'liability', 'income',
-                'sundry creditor', 'creditor', 'revenue', 'secondary loan', 'unsecured loan'
-              ].includes(ledgerTypeLower);
-              
-              // Compute opening balance as-of dateFrom by applying all FY transactions before dateFrom.
-              const openingBalance = isCreditBalanceAccount
-                ? baseOpening + (Number(preEntries.credits) || 0) - (Number(preEntries.debits) || 0)
-                : baseOpening + (Number(preEntries.debits) || 0) - (Number(preEntries.credits) || 0);
-              // Compute closing balance based on account type
-              // Credit balance: Opening + Credits - Debits
-              // Debit balance:  Opening + Debits - Credits
-              const closingBalance = isCreditBalanceAccount
-                ? openingBalance + credits - debits
-                : openingBalance + debits - credits;
-              
-              // Determine if final balance is Debit or Credit
-              let closingDebit = 0;
-              let closingCredit = 0;
-              
-              if (isCreditBalanceAccount) {
-                if (closingBalance >= 0) {
-                  closingCredit = closingBalance;
-                } else {
-                  closingDebit = Math.abs(closingBalance);
-                }
-              } else {
-                if (closingBalance >= 0) {
-                  closingDebit = closingBalance;
-                } else {
-                  closingCredit = Math.abs(closingBalance);
-                }
-              }
-
-              return {
-                subcategory: l.name || 'Unknown',
-                amount: closingBalance,
-                category: l.ledger_type || 'other',
-                opening_balance: openingBalance,
-                debits: debits,
-                credits: credits,
-                closing_debit: closingDebit,
-                closing_credit: closingCredit,
-                closing_balance: closingBalance,
-                difference: closingBalance - openingBalance,
-                legacy_entries: Number(entries.legacy) || 0,
-              };
+            const { data: { user: tbUser } } = await supabase.auth.getUser();
+            if (!tbUser?.id) throw new Error('User not authenticated');
+            const tb = await generateTrialBalanceFromLedger({
+              companyName: selectedCompany.company_name,
+              userId: tbUser.id,
+              dateFrom,
+              dateTo,
             });
-
-            // Calculate totals based on closing balances (The actual Trial Balance principle)
-            const totalDebits = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_debit) || 0), 0);
-            const totalCredits = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_credit) || 0), 0);
-            const totalPeriodDebits = sampleData.reduce((sum, item: any) => sum + (Number(item.debits) || 0), 0);
-            const totalPeriodCredits = sampleData.reduce((sum, item: any) => sum + (Number(item.credits) || 0), 0);
-            
-            const legacyEntries = sampleData.reduce((sum, item: any) => sum + (Number(item.legacy_entries) || 0), 0);
-            const totalOpening = sampleData.reduce((sum, item: any) => sum + (Number(item.opening_balance) || 0), 0);
-            const totalClosing = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_balance) || 0), 0);
-            const difference = totalDebits - totalCredits;
-
-            newSummary = {
-              totalSales: totalCredits, // Reusing field for Credit Total
-              totalPurchases: totalDebits, // Reusing field for Debit Total
-              grossProfit: totalPeriodDebits, // Reusing for Period Total Dr
-              netProfit: difference, // Store difference for display
-              periodCredits: totalPeriodCredits,
-              legacyEntries,
-            };
-            
-            // Show message if no ledgers found
-            if (ledgers.length === 0) {
+            sampleData = tb.rows;
+            newSummary = tb.summary;
+            if (tb.rows.length === 0) {
               toast({
-                title: "No Ledgers Found",
-                description: "No ledgers found for this company. Please create ledgers first.",
-                variant: "default"
+                title: 'No Ledgers Found',
+                description: 'Create ledgers and post invoice vouchers first.',
+                variant: 'default',
               });
             }
           } catch (error: any) {
             logger.error('Trial balance error:', error);
             toast({
-              title: "Error",
-              description: error.message || "Failed to generate trial balance report",
-              variant: "destructive"
+              title: 'Error',
+              description: error.message || 'Failed to generate trial balance',
+              variant: 'destructive',
             });
-            sampleData = [];
-            newSummary = {
-              totalSales: 0,
-              totalPurchases: 0,
-              grossProfit: 0,
-              netProfit: 0
-            };
           }
           break;
         }
         case 'balance-sheet': {
           try {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user?.id) throw new Error('User not authenticated');
-
-            const { data: ledgersData } = await (supabase as any).from('ledgers')
-              .select('id, name, ledger_type, opening_balance')
-              .eq('company_id', selectedCompany.company_name);
-            
-            const ledgers = ledgersData || [];
-            const ledgerIds = ledgers.map(l => l.id);
-
-            const inventoryAsOf = await getInventoryAsOf({
-              companyId: selectedCompany.company_name,
-              asOfDate: dateTo,
+            const { data: { user: bsUser } } = await supabase.auth.getUser();
+            if (!bsUser?.id) throw new Error('User not authenticated');
+            const bs = await generateBalanceSheetFromLedger({
+              companyName: selectedCompany.company_name,
+              userId: bsUser.id,
+              dateFrom,
+              dateTo,
             });
-            const closingStockValue = inventoryAsOf.reduce((sum, item) => sum + (Number(item.stock_value) || 0), 0);
-
-            const financialYearLabel = getFinancialYearForDate(new Date(dateTo)).label;
-            let ledgerEntriesMap = new Map<string, { debits: number; credits: number }>();
-            if (ledgerIds.length > 0) {
-              const { data: entriesData } = await (supabase as any).from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount')
-                .in('ledger_id', ledgerIds)
-                .eq('user_id', user.id)
-                .eq('financial_year', financialYearLabel)
-                .lte('entry_date', dateTo);
-
-              (entriesData || []).forEach(entry => {
-                const lid = entry.ledger_id;
-                const cur = ledgerEntriesMap.get(lid) || { debits: 0, credits: 0 };
-                ledgerEntriesMap.set(lid, {
-                  debits: cur.debits + (Number(entry.debit_amount) || 0),
-                  credits: cur.credits + (Number(entry.credits_amount) || 0)
-                });
-              });
-            }
-
-            const assetRows: any[] = [];
-            const liabilityRows: any[] = [];
-            const equityRows: any[] = [];
-            
-            ledgers.forEach(l => {
-              const entries = ledgerEntriesMap.get(l.id) || { debits: 0, credits: 0 };
-              const baseOpening = Number(l.opening_balance) || 0;
-              const type = (l.ledger_type || '').toLowerCase();
-              const isCreditType = [
-                'capital', 'equity', 'loan', 'payables', 'liability', 'income',
-                'sundry creditor', 'creditor', 'revenue', 'secondary loan', 'unsecured loan'
-              ].includes(type);
-
-              const balance = isCreditType
-                ? baseOpening + entries.credits - entries.debits
-                : baseOpening + entries.debits - entries.credits;
-
-              if (['capital', 'equity'].includes(type)) {
-                equityRows.push({ subcategory: l.name, amount: balance, category: 'Equity' });
-              } else if (['loan', 'payables', 'liability', 'sundry creditor', 'creditor', 'secondary loan', 'unsecured loan'].includes(type)) {
-                liabilityRows.push({ subcategory: l.name, amount: balance, category: 'Liability' });
-              } else if (!['income', 'revenue', 'expense', 'expenses'].includes(type)) {
-                assetRows.push({ subcategory: l.name, amount: balance, category: 'Asset' });
-              }
+            sampleData = bs.rows;
+            newSummary = bs.summary;
+          } catch (error: any) {
+            logger.error('Balance Sheet Error:', error);
+            toast({
+              title: 'Error',
+              description: error.message || 'Failed to generate balance sheet',
+              variant: 'destructive',
             });
-
-            assetRows.push({ subcategory: 'Closing Stock (Inventory)', amount: closingStockValue, category: 'Asset' });
-
-            const totalAssets = assetRows.reduce((sum, r) => sum + r.amount, 0);
-            const totalLiabilities = liabilityRows.reduce((sum, r) => sum + r.amount, 0);
-            const totalEquityBeforePL = equityRows.reduce((sum, r) => sum + r.amount, 0);
-            const retainedEarnings = totalAssets - totalLiabilities - totalEquityBeforePL;
-
-            equityRows.push({ subcategory: 'Profit & Loss A/c (Retained Earnings)', amount: retainedEarnings, category: 'Equity' });
-
-            sampleData = [...assetRows, ...liabilityRows, ...equityRows];
-            newSummary = {
-              totalAssets,
-              totalLiabilities,
-              totalEquity: totalEquityBeforePL + retainedEarnings,
-              retainedEarnings,
-              netProfit: retainedEarnings,
-              grossProfit: 0,
-              totalSales: totalAssets,
-              totalPurchases: totalLiabilities + totalEquityBeforePL + retainedEarnings
-            };
-          } catch (e: any) {
-            logger.error('Balance Sheet Error:', e);
           }
           break;
         }
@@ -1807,159 +1041,23 @@ export const ReportsManager: React.FC = () => {
         
         case 'ledger-summary': {
           try {
-            // Fetch ledgers for the selected company
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user?.id) {
-              toast({
-                title: "Error",
-                description: "User not authenticated",
-                variant: "destructive"
-              });
-              throw new Error('User not authenticated');
-            }
-
-            // Derive financial year from the report start date
-            const fromDateObj = new Date(dateFrom);
-            const fyUtils = Number.isNaN(fromDateObj.getTime())
-              ? getCurrentFinancialYear()
-              : getFinancialYearForDate(fromDateObj);
-            const financialYearLabel = fyUtils.label;
-
-            const { data: ledgersData, error: ledgersError } = await (supabase as any).from('ledgers')
-              .select('id, name, ledger_type, current_balance, opening_balance')
-              .eq('company_id', selectedCompany.company_name)
-              .eq('user_id', user.id)
-              .eq('financial_year', financialYearLabel);
-
-            if (ledgersError) {
-              logger.error('Error fetching ledgers:', ledgersError);
-              throw ledgersError;
-            }
-
-            const ledgers = ledgersData || [];
-            const ledgerIds = ledgers.map(l => l.id);
-            
-            let periodEntriesMap = new Map<string, { debits: number; credits: number }>();
-            let prePeriodEntriesMap = new Map<string, { debits: number; credits: number }>();
-            
-            // Fetch ledger entries for the period and pre-period
-            if (ledgerIds.length > 0) {
-              // Current period entries
-              const { data: entriesData, error: entriesError } = await (supabase as any).from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount, entry_date')
-                .in('ledger_id', ledgerIds)
-                .eq('user_id', user.id)
-                .eq('financial_year', financialYearLabel)
-                .gte('entry_date', dateFrom)
-                .lte('entry_date', dateTo);
-
-              if (entriesError) {
-                logger.error('Error fetching ledger entries:', entriesError);
-              } else {
-                (entriesData || []).forEach(entry => {
-                  const ledgerId = entry.ledger_id;
-                  const current = periodEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
-                  periodEntriesMap.set(ledgerId, {
-                    debits: current.debits + (Number(entry.debit_amount) || 0),
-                    credits: current.credits + (Number(entry.credit_amount) || 0)
-                  });
-                });
-              }
-
-              // Pre-period entries (from FY start to dateFrom)
-              const { data: preData, error: preError } = await (supabase as any).from('ledger_entries')
-                .select('ledger_id, debit_amount, credit_amount, entry_date')
-                .in('ledger_id', ledgerIds)
-                .eq('user_id', user.id)
-                .eq('financial_year', financialYearLabel)
-                .gte('entry_date', fyUtils.start.toISOString().split('T')[0])
-                .lt('entry_date', dateFrom);
-
-              if (preError) {
-                logger.error('Error fetching pre-period ledger entries:', preError);
-              } else {
-                (preData || []).forEach(entry => {
-                  const ledgerId = entry.ledger_id;
-                  const current = prePeriodEntriesMap.get(ledgerId) || { debits: 0, credits: 0 };
-                  prePeriodEntriesMap.set(ledgerId, {
-                    debits: current.debits + (Number(entry.debit_amount) || 0),
-                    credits: current.credits + (Number(entry.credit_amount) || 0)
-                  });
-                });
-              }
-            }
-
-            // Calculate all ledgers with opening, debits, credits, and closing balance
-            sampleData = ledgers.map((l: any) => {
-              const entries = periodEntriesMap.get(l.id) || { debits: 0, credits: 0 };
-              const preEntries = prePeriodEntriesMap.get(l.id) || { debits: 0, credits: 0 };
-              const baseOpening = Number(l.opening_balance) || 0;
-              const debits = Number(entries.debits) || 0;
-              const credits = Number(entries.credits) || 0;
-              
-              // Determine account type for proper balance calculation
-              const ledgerTypeLower = (l.ledger_type || '').toLowerCase();
-              const isCreditBalanceAccount = [
-                'capital', 'equity', 'loan', 'payables', 'liability', 'income',
-                'sundry creditor', 'creditor', 'revenue', 'secondary loan', 'unsecured loan'
-              ].includes(ledgerTypeLower);
-              
-              // Calculate opening balance as of dateFrom
-              const openingAsOfDate = isCreditBalanceAccount
-                ? baseOpening + (preEntries.credits) - (preEntries.debits)
-                : baseOpening + (preEntries.debits) - (preEntries.credits);
-                
-              // Calculate closing balance as of dateTo
-              const closingBalance = isCreditBalanceAccount
-                ? openingAsOfDate + credits - debits
-                : openingAsOfDate + debits - credits;
-              
-              return {
-                subcategory: l.name || 'Unknown',
-                amount: closingBalance,
-                category: l.ledger_type || 'other',
-                opening_balance: openingAsOfDate,
-                debits: debits,
-                credits: credits,
-                closing_balance: closingBalance
-              };
+            const { data: { user: lsUser } } = await supabase.auth.getUser();
+            if (!lsUser?.id) throw new Error('User not authenticated');
+            const ls = await generateLedgerSummaryFromLedger({
+              companyName: selectedCompany.company_name,
+              userId: lsUser.id,
+              dateFrom,
+              dateTo,
             });
-
-            // Calculate totals for summary
-            const totalDebits = sampleData.reduce((sum, item: any) => sum + (Number(item.debits) || 0), 0);
-            const totalCredits = sampleData.reduce((sum, item: any) => sum + (Number(item.credits) || 0), 0);
-            const totalOpening = sampleData.reduce((sum, item: any) => sum + (Number(item.opening_balance) || 0), 0);
-            const totalClosing = sampleData.reduce((sum, item: any) => sum + (Number(item.closing_balance) || 0), 0);
-
-            newSummary = {
-              totalSales: totalCredits, // Total Credits
-              totalPurchases: totalDebits, // Total Debits
-              grossProfit: totalClosing - totalOpening, // Net Change
-              netProfit: totalClosing // Total Closing Balance
-            };
-            
-            // Show message if no ledgers found
-            if (ledgers.length === 0) {
-              toast({
-                title: "No Ledgers Found",
-                description: `No ledgers found for company ${selectedCompany.company_name} in the ${financialYearLabel} financial year.`,
-                variant: "default"
-              });
-            }
+            sampleData = ls.rows;
+            newSummary = ls.summary;
           } catch (error: any) {
             logger.error('Ledger summary error:', error);
             toast({
-              title: "Error",
-              description: error.message || "Failed to generate ledger summary report",
-              variant: "destructive"
+              title: 'Error',
+              description: error.message || 'Failed to generate ledger summary',
+              variant: 'destructive',
             });
-            sampleData = [];
-            newSummary = {
-              totalSales: 0,
-              totalPurchases: 0,
-              grossProfit: 0,
-              netProfit: 0
-            };
           }
           break;
         }

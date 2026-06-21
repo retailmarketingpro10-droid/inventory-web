@@ -777,76 +777,80 @@ export const PurchaseOrderManager = () => {
     if (!selectedPO) return;
 
     try {
-      // Update received quantities for each item
-      for (const itemId in receivingItems) {
-        await supabase
-          .from('purchase_order_items')
-          .update({ received_quantity: receivingItems[itemId] })
-          .eq('id', itemId);
+      const itemsToReceive = poItems.filter(
+        (item) => (receivingItems[item.id] || 0) > 0
+      );
+
+      if (itemsToReceive.length === 0) {
+        toast({
+          title: "No Changes",
+          description: "Enter a quantity to receive before saving",
+          variant: "destructive",
+        });
+        return;
       }
 
-      // Check if all items are fully received
-      const updatedItems = poItems.map(item => ({
+      for (const item of itemsToReceive) {
+        const receiveQty = receivingItems[item.id] || 0;
+        const newReceivedQuantity = (item.received_quantity || 0) + receiveQty;
+
+        const { error: itemError } = await supabase
+          .from('purchase_order_items')
+          .update({ received_quantity: newReceivedQuantity })
+          .eq('id', item.id);
+
+        if (itemError) throw itemError;
+
+        if (item.product_id && receiveQty > 0) {
+          const { data: product, error: productError } = await supabase
+            .from('products')
+            .select('current_stock')
+            .eq('id', item.product_id)
+            .single();
+
+          if (productError || !product) throw productError;
+
+          const { error: stockError } = await supabase
+            .from('products')
+            .update({ current_stock: product.current_stock + receiveQty })
+            .eq('id', item.product_id);
+
+          if (stockError) throw stockError;
+        }
+      }
+
+      const updatedItems = poItems.map((item) => ({
         ...item,
-        received_quantity: receivingItems[item.id] || item.received_quantity
+        received_quantity: (item.received_quantity || 0) + (receivingItems[item.id] || 0),
       }));
 
-      const allFullyReceived = updatedItems.every(item => 
-        (item.received_quantity || 0) >= item.quantity
+      const allFullyReceived = updatedItems.every(
+        (item) => (item.received_quantity || 0) >= item.quantity
+      );
+      const hasPartialReceipt = updatedItems.some(
+        (item) =>
+          (item.received_quantity || 0) > 0 &&
+          (item.received_quantity || 0) < item.quantity
       );
 
-      const hasPartialReceipt = updatedItems.some(item => 
-        (item.received_quantity || 0) > 0 && (item.received_quantity || 0) < item.quantity
-      );
-
-      // Update PO status based on receipt status
       let newStatus = selectedPO.status;
       if (allFullyReceived) {
         newStatus = 'received';
-        
-        // Only update inventory when fully received
-        for (const item of updatedItems) {
-          if (item.product_id) {
-            const { data: product } = await supabase
-              .from('products')
-              .select('current_stock')
-              .eq('id', item.product_id)
-              .single();
-            
-            if (product) {
-              // Add the newly received quantity (not total received)
-              const previouslyReceived = poItems.find(pi => pi.id === item.id)?.received_quantity || 0;
-              const newlyReceived = (item.received_quantity || 0) - previouslyReceived;
-              
-              if (newlyReceived > 0) {
-                await supabase
-                  .from('products')
-                  .update({ 
-                    current_stock: product.current_stock + newlyReceived
-                  })
-                  .eq('id', item.product_id);
-              }
-            }
-          }
-        }
-        
-        toast({ 
-          title: "Success", 
-          description: "Purchase order fully received and inventory updated" 
-        });
       } else if (hasPartialReceipt) {
         newStatus = 'partial';
-        toast({ 
-          title: "Success", 
-          description: "Partial receipt recorded. Inventory will update when fully received." 
-        });
       }
 
-      // Update PO status
       await supabase
         .from('purchase_orders')
         .update({ status: newStatus })
         .eq('id', selectedPO.id);
+
+      toast({
+        title: "Success",
+        description: allFullyReceived
+          ? "Purchase order fully received and inventory updated"
+          : "Partial receipt recorded and inventory updated",
+      });
 
       fetchPurchaseOrders();
       setShowReceivingModal(false);

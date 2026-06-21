@@ -8,7 +8,9 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useCompany } from "@/contexts/CompanyContext";
-import { Save, Building } from "lucide-react";
+import { Save, Building, BookOpen } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { InvoiceAccountingSettings } from "@/components/business/InvoiceAccountingSettings";
 import { logger } from "@/lib/logger";
 
 interface CompanyDetails {
@@ -206,9 +208,12 @@ export const CompanySettings = () => {
 
       let updatedEntities;
       if (companyIndex >= 0) {
-        // Update existing company
+        // Update existing company (preserve ledger_mapping and other stored fields)
         updatedEntities = [...existingEntities];
-        updatedEntities[companyIndex] = updatedBusinessEntity;
+        updatedEntities[companyIndex] = {
+          ...existingEntities[companyIndex],
+          ...updatedBusinessEntity,
+        };
       } else {
         // Add new company
         updatedEntities = [...existingEntities, updatedBusinessEntity];
@@ -316,6 +321,19 @@ export const CompanySettings = () => {
         )}
       </div>
 
+      <Tabs defaultValue="company" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="company" className="flex items-center gap-2">
+            <Building className="h-4 w-4" />
+            Company Details
+          </TabsTrigger>
+          <TabsTrigger value="invoice-ledger" className="flex items-center gap-2">
+            <BookOpen className="h-4 w-4" />
+            Invoice & Ledger
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="company">
       <Card>
         <CardHeader>
           <CardTitle>Company Information</CardTitle>
@@ -475,6 +493,12 @@ export const CompanySettings = () => {
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="invoice-ledger">
+          <InvoiceAccountingSettings />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

@@ -16,6 +16,9 @@ export interface CreateLedgerTransactionParams {
   userId: string;
   entryDate: string; // ISO date (YYYY-MM-DD)
   lines: LedgerPostingLine[];
+  voucherType?: string;
+  invoiceId?: string;
+  referenceNumber?: string;
 }
 
 /**
@@ -25,7 +28,17 @@ export interface CreateLedgerTransactionParams {
  * The caller is responsible for ensuring debits = credits.
  */
 export async function createLedgerTransaction(params: CreateLedgerTransactionParams) {
-  const { description, companyId, financialYear, userId, entryDate, lines } = params;
+  const {
+    description,
+    companyId,
+    financialYear,
+    userId,
+    entryDate,
+    lines,
+    voucherType,
+    invoiceId,
+    referenceNumber,
+  } = params;
 
   if (!lines || lines.length < 2) {
     throw new Error("A ledger transaction must contain at least two lines.");
@@ -53,6 +66,9 @@ export async function createLedgerTransaction(params: CreateLedgerTransactionPar
         financial_year: financialYear,
         user_id: userId,
         transaction_date: entryDate,
+        voucher_type: voucherType || "journal",
+        invoice_id: invoiceId || null,
+        reference_number: referenceNumber || null,
       },
     ])
     .select()

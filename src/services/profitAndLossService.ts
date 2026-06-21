@@ -1,5 +1,9 @@
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/lib/logger";
+import {
+  fetchPurchaseOrdersForReport,
+  sumPurchaseOrderSubtotals,
+} from "@/lib/purchaseOrderReports";
 
 export interface ProfitAndLossParams {
   companyName: string;
@@ -147,6 +151,15 @@ export async function generateProfitAndLossReport(
   const purchasePeriodQtyMap = createQtyMap(purchaseInvoiceItems);
   const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
 
+  const { data: userData } = await supabase.auth.getUser();
+  const reportUserId = userData?.user?.id;
+  const purchaseOrdersInPeriod = await fetchPurchaseOrdersForReport({
+    companyName,
+    dateFrom,
+    dateTo,
+    userId: reportUserId,
+  });
+
   // Fetch all products (including imported opening stock quantity used for first-period opening stock)
   const { data: products, error: productsError } = await (supabase as any).from("products")
     .select("id, current_stock, purchase_price, selling_price, gst_rate, opening_stock_qty, opening_stock_value")
@@ -190,8 +203,10 @@ export async function generateProfitAndLossReport(
   const openingStockCost = openingStockValue;
   const closingStock = closingStockValue;
 
-  const totalPurchases =
+  const totalPurchaseInvoices =
     purchaseInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
+  const totalPurchaseOrders = sumPurchaseOrderSubtotals(purchaseOrdersInPeriod);
+  const totalPurchases = totalPurchaseInvoices + totalPurchaseOrders;
   const totalPurchaseReturns =
     purchaseReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
   const netPurchases = totalPurchases - totalPurchaseReturns;
@@ -218,7 +233,6 @@ export async function generateProfitAndLossReport(
   const indirectExpenses = salesDiscounts;
 
   // Ledger-based indirect income/expenses
-  const { data: userData } = await supabase.auth.getUser();
   const user = userData?.user;
   let indirectIncome = 0;
   let indirectExpensesFromLedgers = 0;
@@ -304,7 +318,8 @@ export async function generateProfitAndLossReport(
     { subcategory: "Less: Sale Returns", amount: -totalSaleReturns, category: "Revenue" },
     { subcategory: "Net Sales", amount: netSales, category: "Revenue" },
     { subcategory: "Opening Stock", amount: openingStockCost, category: "Cost of Goods Sold" },
-    { subcategory: "Purchase Account", amount: totalPurchases, category: "Cost of Goods Sold" },
+    { subcategory: "Purchase Account (Invoices)", amount: totalPurchaseInvoices, category: "Cost of Goods Sold" },
+    { subcategory: "Purchase Orders (PO)", amount: totalPurchaseOrders, category: "Cost of Goods Sold" },
     { subcategory: "Less: Purchase Returns", amount: -totalPurchaseReturns, category: "Cost of Goods Sold" },
     { subcategory: "Net Purchases", amount: netPurchases, category: "Cost of Goods Sold" },
     { subcategory: "Direct Expenses - Labour (Base, excl. GST)", amount: labourDirectBase, category: "Cost of Goods Sold" },
