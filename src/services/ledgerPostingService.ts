@@ -3,10 +3,14 @@ import { logger } from "@/lib/logger";
 
 export type LedgerSide = "debit" | "credit";
 
+export type LedgerEntryStatus = "paid" | "due" | "partial";
+
 export interface LedgerPostingLine {
   ledger_id: string;
   amount: number;
   side: LedgerSide;
+  /** Collection status for receivable/payable lines; book entries default to paid */
+  status?: LedgerEntryStatus;
 }
 
 export interface CreateLedgerTransactionParams {
@@ -90,6 +94,7 @@ export async function createLedgerTransaction(params: CreateLedgerTransactionPar
     financial_year: financialYear,
     user_id: userId,
     transaction_id: transactionId,
+    status: line.status || "paid",
   }));
 
   const { error: entriesError } = await (supabase as any)

@@ -2,6 +2,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { logger } from '@/lib/logger';
 import type { LedgerMappingSettings } from '@/config/ledgerAccounts';
 import { getLedgerMappingSettings } from '@/services/accountingSettingsService';
+import { ensureDefaultChartOfAccounts } from '@/services/chartOfAccountsService';
+import { getStockValuationForPeriod } from '@/services/inventoryValuationService';
 import { getFinancialYearForDate } from '@/utils/indianBusiness';
 
 export interface LedgerReportParams {
@@ -56,39 +58,103 @@ function signedBalance(
     : base + debits - credits;
 }
 
-async function loadLedgers(params: LedgerReportParams, fyLabel: string) {
+function mappingLedgerIds(mapping: LedgerMappingSettings): string[] {
+  const ids = new Set<string>();
+  const add = (id?: string) => {
+    if (id) ids.add(id);
+  };
+  add(mapping.salesAccountId);
+  add(mapping.purchaseAccountId);
+  add(mapping.cashAccountId);
+  add(mapping.bankAccountId);
+  add(mapping.sundryDebtorsAccountId);
+  add(mapping.sundryCreditorsAccountId);
+  add(mapping.discountAllowedAccountId);
+  add(mapping.discountReceivedAccountId);
+  add(mapping.stockInHandAccountId);
+  add(mapping.capitalAccountId);
+  (mapping.directExpenseAccountIds || []).forEach(add);
+  (mapping.indirectExpenseAccountIds || []).forEach(add);
+  (mapping.indirectIncomeAccountIds || []).forEach(add);
+  return [...ids];
+}
+
+async function loadLedgers(
+  params: LedgerReportParams,
+  fyLabel: string,
+  mapping?: LedgerMappingSettings
+) {
   const { data, error } = await (supabase as any)
     .from('ledgers')
-    .select('id, name, ledger_type, opening_balance')
+    .select('id, name, ledger_type, opening_balance, financial_year')
     .eq('company_id', params.companyName)
-    .eq('user_id', params.userId)
-    .eq('financial_year', fyLabel);
+    .eq('user_id', params.userId);
 
   if (error) {
     logger.error('ledgerReportService: loadLedgers', error);
     return [];
   }
-  return (data || []) as LedgerRow[];
+
+  const allLedgers = (data || []) as LedgerRow[];
+  const fyLedgers = allLedgers.filter(
+    (l: any) => !l.financial_year || l.financial_year === fyLabel
+  );
+  const ledgers = fyLedgers.length > 0 ? fyLedgers : allLedgers;
+
+  const mappedIds = mapping ? mappingLedgerIds(mapping) : [];
+  const missingIds = mappedIds.filter((id) => !ledgers.some((l) => l.id === id));
+
+  if (missingIds.length === 0) return ledgers;
+
+  const { data: extra, error: extraError } = await (supabase as any)
+    .from('ledgers')
+    .select('id, name, ledger_type, opening_balance, financial_year')
+    .in('id', missingIds)
+    .eq('user_id', params.userId);
+
+  if (extraError) {
+    logger.error('ledgerReportService: loadMappedLedgers', extraError);
+    return ledgers;
+  }
+
+  return [...ledgers, ...((extra || []) as LedgerRow[])];
 }
 
 async function loadMovements(
   ledgerIds: string[],
   userId: string,
-  fyLabel: string,
   from: string,
-  to: string
+  to: string,
+  companyName?: string
 ): Promise<Map<string, Movement>> {
   const map = new Map<string, Movement>();
-  if (!ledgerIds.length) return map;
 
-  const { data, error } = await (supabase as any)
-    .from('ledger_entries')
-    .select('ledger_id, debit_amount, credit_amount')
-    .in('ledger_id', ledgerIds)
-    .eq('user_id', userId)
-    .eq('financial_year', fyLabel)
-    .gte('entry_date', from)
-    .lte('entry_date', to);
+  let data: any[] | null = null;
+  let error: any = null;
+
+  if (companyName) {
+    const result = await (supabase as any)
+      .from('ledger_entries')
+      .select('ledger_id, debit_amount, credit_amount, ledgers!inner(company_id)')
+      .eq('user_id', userId)
+      .eq('ledgers.company_id', companyName)
+      .gte('entry_date', from)
+      .lte('entry_date', to);
+    data = result.data;
+    error = result.error;
+  } else if (ledgerIds.length) {
+    const result = await (supabase as any)
+      .from('ledger_entries')
+      .select('ledger_id, debit_amount, credit_amount')
+      .in('ledger_id', ledgerIds)
+      .eq('user_id', userId)
+      .gte('entry_date', from)
+      .lte('entry_date', to);
+    data = result.data;
+    error = result.error;
+  } else {
+    return map;
+  }
 
   if (error) {
     logger.error('ledgerReportService: loadMovements', error);
@@ -108,11 +174,26 @@ async function loadMovements(
 async function loadPrePeriodMovements(
   ledgerIds: string[],
   userId: string,
-  fyLabel: string,
   fyStart: string,
-  dateFrom: string
+  dateFrom: string,
+  companyName?: string
 ): Promise<Map<string, Movement>> {
-  return loadMovements(ledgerIds, userId, fyLabel, fyStart, dateFrom);
+  const dayBefore = new Date(dateFrom);
+  dayBefore.setDate(dayBefore.getDate() - 1);
+  const preEnd = dayBefore.toISOString().split('T')[0];
+  if (preEnd < fyStart) return new Map();
+  return loadMovements(ledgerIds, userId, fyStart, preEnd, companyName);
+}
+
+async function resolveMapping(params: LedgerReportParams) {
+  const stored =
+    params.mapping ||
+    (await getLedgerMappingSettings(params.userId, params.companyName));
+  return ensureDefaultChartOfAccounts(
+    params.userId,
+    params.companyName,
+    stored
+  );
 }
 
 function sumMovementForIds(map: Map<string, Movement>, ids: string[] = []) {
@@ -134,22 +215,23 @@ function netExpense(m: Movement) {
 }
 
 export async function generateTrialBalanceFromLedger(params: LedgerReportParams) {
+  const mapping = await resolveMapping(params);
   const fy = getFinancialYearForDate(new Date(params.dateFrom));
-  const ledgers = await loadLedgers(params, fy.label);
+  const ledgers = await loadLedgers(params, fy.label, mapping);
   const ledgerIds = ledgers.map((l) => l.id);
   const periodMap = await loadMovements(
     ledgerIds,
     params.userId,
-    fy.label,
     params.dateFrom,
-    params.dateTo
+    params.dateTo,
+    params.companyName
   );
   const preMap = await loadPrePeriodMovements(
     ledgerIds,
     params.userId,
-    fy.label,
     fy.start.toISOString().split('T')[0],
-    params.dateFrom
+    params.dateFrom,
+    params.companyName
   );
 
   const rows = ledgers.map((l) => {
@@ -198,25 +280,23 @@ export async function generateTrialBalanceFromLedger(params: LedgerReportParams)
 }
 
 export async function generateProfitAndLossFromLedger(params: LedgerReportParams) {
-  const mapping =
-    params.mapping ||
-    (await getLedgerMappingSettings(params.userId, params.companyName));
+  const mapping = await resolveMapping(params);
   const fy = getFinancialYearForDate(new Date(params.dateFrom));
-  const ledgers = await loadLedgers(params, fy.label);
-  const ledgerIds = ledgers.map((l) => l.id);
+  const ledgers = await loadLedgers(params, fy.label, mapping);
+  const ledgerIds = [...new Set([...ledgers.map((l) => l.id), ...mappingLedgerIds(mapping)])];
   const periodMap = await loadMovements(
     ledgerIds,
     params.userId,
-    fy.label,
     params.dateFrom,
-    params.dateTo
+    params.dateTo,
+    params.companyName
   );
   const preMap = await loadPrePeriodMovements(
     ledgerIds,
     params.userId,
-    fy.label,
     fy.start.toISOString().split('T')[0],
-    params.dateFrom
+    params.dateFrom,
+    params.companyName
   );
 
   const salesM = mapping.salesAccountId
@@ -226,8 +306,35 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
     ? periodMap.get(mapping.purchaseAccountId) || { debits: 0, credits: 0 }
     : { debits: 0, credits: 0 };
 
-  const netSales = Math.max(0, netIncome(salesM));
-  const netPurchases = Math.max(0, netExpense(purchaseM));
+  let netSales = Math.max(0, netIncome(salesM));
+  let netPurchases = Math.max(0, netExpense(purchaseM));
+
+  if (netSales === 0) {
+    for (const l of ledgers) {
+      if (l.name.toLowerCase() !== 'sales account') continue;
+      const candidate = Math.max(
+        0,
+        netIncome(periodMap.get(l.id) || { debits: 0, credits: 0 })
+      );
+      if (candidate > 0) {
+        netSales = candidate;
+        break;
+      }
+    }
+  }
+  if (netPurchases === 0) {
+    for (const l of ledgers) {
+      if (l.name.toLowerCase() !== 'purchase account') continue;
+      const candidate = Math.max(
+        0,
+        netExpense(periodMap.get(l.id) || { debits: 0, credits: 0 })
+      );
+      if (candidate > 0) {
+        netPurchases = candidate;
+        break;
+      }
+    }
+  }
 
   const directExpenseIds = mapping.directExpenseAccountIds || [];
   const directExpenses = Math.max(
@@ -255,7 +362,21 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
 
   let openingStock = 0;
   let closingStock = 0;
-  if (mapping.stockInHandAccountId) {
+
+  try {
+    const stockValuation = await getStockValuationForPeriod({
+      companyId: params.companyName,
+      dateFrom: params.dateFrom,
+      dateTo: params.dateTo,
+    });
+    openingStock = stockValuation.openingStock;
+    closingStock = stockValuation.closingStock;
+  } catch (stockError) {
+    logger.error('ledgerReportService: stock valuation failed', stockError);
+  }
+
+  // Fallback: Stock-in-Hand ledger if inventory module has no valued stock
+  if (openingStock === 0 && closingStock === 0 && mapping.stockInHandAccountId) {
     const stockLedger = ledgers.find((l) => l.id === mapping.stockInHandAccountId);
     if (stockLedger) {
       const pre = preMap.get(stockLedger.id) || { debits: 0, credits: 0 };
@@ -300,16 +421,17 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
 }
 
 export async function generateBalanceSheetFromLedger(params: LedgerReportParams) {
+  const mapping = await resolveMapping(params);
   const fy = getFinancialYearForDate(new Date(params.dateTo));
-  const ledgers = await loadLedgers(params, fy.label);
+  const ledgers = await loadLedgers(params, fy.label, mapping);
   const ledgerIds = ledgers.map((l) => l.id);
   const fyStart = fy.start.toISOString().split('T')[0];
   const movements = await loadMovements(
     ledgerIds,
     params.userId,
-    fy.label,
     fyStart,
-    params.dateTo
+    params.dateTo,
+    params.companyName
   );
 
   const assetRows: any[] = [];

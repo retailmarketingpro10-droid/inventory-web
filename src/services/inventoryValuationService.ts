@@ -94,8 +94,14 @@ export async function getInventoryAsOf(params: {
     }
     if (!unitCost || Number.isNaN(unitCost)) unitCost = 0;
 
-    const qtyAsOf = importedOpeningQty + (movementQty.get(String(p.id)) || 0);
-    const stockValue = qtyAsOf * unitCost;
+    const movedQty = movementQty.get(String(p.id)) || 0;
+    const qtyAsOf = importedOpeningQty + movedQty;
+
+    // Use imported opening value at period start when no movements have occurred yet
+    let stockValue = qtyAsOf * unitCost;
+    if (movedQty === 0 && openingValue > 0) {
+      stockValue = openingValue;
+    }
 
     return {
       product_id: String(p.id),
@@ -107,5 +113,40 @@ export async function getInventoryAsOf(params: {
       stock_value: round2(stockValue),
     };
   });
+}
+
+/** Opening/closing stock for P&L — from product inventory, not ledger (stock is not auto-posted). */
+export async function getStockValuationForPeriod(params: {
+  companyId: string;
+  dateFrom: string;
+  dateTo: string;
+}): Promise<{ openingStock: number; closingStock: number }> {
+  const dayBefore = new Date(params.dateFrom);
+  dayBefore.setDate(dayBefore.getDate() - 1);
+  const openingAsOf = dayBefore.toISOString().split("T")[0];
+
+  const [openingRows, closingRows] = await Promise.all([
+    getInventoryAsOf({ companyId: params.companyId, asOfDate: openingAsOf }),
+    getInventoryAsOf({ companyId: params.companyId, asOfDate: params.dateTo }),
+  ]);
+
+  const openingStock = round2(
+    openingRows.reduce((sum, row) => sum + Math.max(0, row.stock_value), 0)
+  );
+  const closingStock = round2(
+    closingRows.reduce((sum, row) => sum + Math.max(0, row.stock_value), 0)
+  );
+
+  return { openingStock, closingStock };
+}
+
+export async function getTotalStockValue(
+  companyId: string,
+  asOfDate?: string
+): Promise<number> {
+  const date =
+    asOfDate || new Date().toISOString().split('T')[0];
+  const rows = await getInventoryAsOf({ companyId, asOfDate: date });
+  return round2(rows.reduce((sum, row) => sum + Math.max(0, row.stock_value), 0));
 }
 

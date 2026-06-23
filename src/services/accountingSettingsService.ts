@@ -28,6 +28,7 @@ export async function getLedgerMappingSettings(
       directExpenseAccountIds: stored?.directExpenseAccountIds || [],
       indirectExpenseAccountIds: stored?.indirectExpenseAccountIds || [],
       indirectIncomeAccountIds: stored?.indirectIncomeAccountIds || [],
+      syncStockToLedger: stored?.syncStockToLedger !== false,
     };
   } catch (error) {
     logger.error('Failed to load ledger mapping settings:', error);

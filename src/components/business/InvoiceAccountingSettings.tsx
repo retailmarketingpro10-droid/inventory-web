@@ -13,7 +13,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { useCompany } from '@/contexts/CompanyContext';
-import { BookOpen, Save, Wand2 } from 'lucide-react';
+import { BookOpen, Package, Save, Wand2 } from 'lucide-react';
 import {
   DEFAULT_LEDGER_MAPPING,
   LEDGER_ROLE_LABELS,
@@ -30,6 +30,8 @@ import {
   fetchCompanyLedgers,
   type CompanyLedger,
 } from '@/services/chartOfAccountsService';
+import { reconcileStockInHandLedger } from '@/services/stockLedgerSyncService';
+import { getTotalStockValue } from '@/services/inventoryValuationService';
 
 const PRIMARY_ROLES: LedgerRole[] = [
   'sales',
@@ -56,6 +58,8 @@ export function InvoiceAccountingSettings() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingStock, setSyncingStock] = useState(false);
+  const [stockValue, setStockValue] = useState<number | null>(null);
   const [ledgers, setLedgers] = useState<CompanyLedger[]>([]);
   const [mapping, setMapping] = useState<LedgerMappingSettings>({
     ...DEFAULT_LEDGER_MAPPING,
@@ -71,6 +75,8 @@ export function InvoiceAccountingSettings() {
       ]);
       setMapping(settings);
       setLedgers(ledgerList);
+      const total = await getTotalStockValue(selectedCompany.company_name);
+      setStockValue(total);
     } finally {
       setLoading(false);
     }
@@ -92,9 +98,19 @@ export function InvoiceAccountingSettings() {
       setMapping(updated);
       await saveLedgerMappingSettings(user.id, selectedCompany.company_name, updated);
       setLedgers(await fetchCompanyLedgers(user.id, selectedCompany.company_name));
+      const stockResult = await reconcileStockInHandLedger({
+        companyId: selectedCompany.company_name,
+        userId: user.id,
+        mapping: updated,
+        reference: 'Initial stock sync',
+      });
+      const total = await getTotalStockValue(selectedCompany.company_name);
+      setStockValue(total);
       toast({
         title: 'Default chart created',
-        description: 'Standard Tally-style ledgers were created and mapped.',
+        description: stockResult.adjusted
+          ? 'Ledgers mapped and Stock-in-Hand synced to inventory value.'
+          : 'Standard Tally-style ledgers were created and mapped.',
       });
     } catch (error: any) {
       toast({
@@ -104,6 +120,36 @@ export function InvoiceAccountingSettings() {
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSyncStock = async () => {
+    if (!user?.id || !selectedCompany?.company_name) return;
+    setSyncingStock(true);
+    try {
+      const result = await reconcileStockInHandLedger({
+        companyId: selectedCompany.company_name,
+        userId: user.id,
+        mapping,
+        reference: 'Manual stock sync',
+      });
+      const total = await getTotalStockValue(selectedCompany.company_name);
+      setStockValue(total);
+      setLedgers(await fetchCompanyLedgers(user.id, selectedCompany.company_name));
+      toast({
+        title: result.adjusted ? 'Stock synced' : 'Already in sync',
+        description: result.adjusted
+          ? `Stock-in-Hand adjusted by ₹${Math.abs(result.difference || 0).toFixed(2)} to match inventory (₹${total.toFixed(2)}).`
+          : `Stock-in-Hand already matches inventory value (₹${total.toFixed(2)}).`,
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Sync failed',
+        description: error.message || 'Could not sync Stock-in-Hand ledger',
+        variant: 'destructive',
+      });
+    } finally {
+      setSyncingStock(false);
     }
   };
 
@@ -163,6 +209,15 @@ export function InvoiceAccountingSettings() {
               <Wand2 className="h-4 w-4 mr-2" />
               Create Default Chart
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSyncStock}
+              disabled={saving || syncingStock}
+            >
+              <Package className="h-4 w-4 mr-2" />
+              {syncingStock ? 'Syncing…' : 'Sync Stock to Ledger'}
+            </Button>
             <Button type="button" onClick={handleSave} disabled={saving}>
               <Save className="h-4 w-4 mr-2" />
               Save Mapping
@@ -186,6 +241,23 @@ export function InvoiceAccountingSettings() {
                 onCheckedChange={(v) => setMapping((p) => ({ ...p, postOnPayment: v }))}
               />
             </div>
+            <div className="flex items-center justify-between rounded-lg border p-3 sm:col-span-2">
+              <Label htmlFor="sync-stock">Sync Stock-in-Hand ledger to inventory value</Label>
+              <Switch
+                id="sync-stock"
+                checked={mapping.syncStockToLedger !== false}
+                onCheckedChange={(v) => setMapping((p) => ({ ...p, syncStockToLedger: v }))}
+              />
+            </div>
+
+            {stockValue !== null && (
+              <div className="rounded-lg border bg-muted/40 p-3 sm:col-span-2 text-sm">
+                Current valued inventory:{' '}
+                <span className="font-semibold">₹{stockValue.toFixed(2)}</span>
+                {' — '}
+                use <strong>Sync Stock to Ledger</strong> if Stock-in-Hand shows ₹0.
+              </div>
+            )}
 
             {PRIMARY_ROLES.map((role) => {
               const key = roleToMappingKey(role);

@@ -19,12 +19,20 @@ import { downloadInvoiceAsCSV } from "@/utils/pdfGenerator";
 import { InvoicePDF } from "@/components/pdf/InvoicePDF";
 import { pdf } from "@react-pdf/renderer";
 import { GSTSyncService } from "@/services/gstSyncService";
-import { getLedgerMappingSettings } from "@/services/accountingSettingsService";
+import { getLedgerMappingSettings, saveLedgerMappingSettings } from "@/services/accountingSettingsService";
 import { ensureDefaultChartOfAccounts } from "@/services/chartOfAccountsService";
 import {
   postInvoiceToLedger,
   postPaymentToLedger,
 } from "@/services/invoiceLedgerPostingService";
+import { reconcileStockInHandLedger } from "@/services/stockLedgerSyncService";
+import {
+  fetchEligibleOriginalInvoices,
+  fetchOriginalInvoiceSummary,
+  isReturnInvoiceType,
+  loadReturnableLineItems,
+  type EligibleOriginalInvoice,
+} from "@/services/returnInvoiceService";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,6 +63,8 @@ interface Invoice {
   discount_percentage?: number;
   status: string;
   notes: string | null;
+  original_invoice_id?: string | null;
+  original_invoice_number?: string | null;
   total_paid?: number;
   amount_due?: number;
   suppliers?: {
@@ -157,6 +167,9 @@ export const InvoiceManager = () => {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [selectedPO, setSelectedPO] = useState<string>("");
   const [poItems, setPOItems] = useState<PurchaseOrderItem[]>([]);
+  const [selectedOriginalInvoice, setSelectedOriginalInvoice] = useState<string>("");
+  const [eligibleOriginalInvoices, setEligibleOriginalInvoices] = useState<EligibleOriginalInvoice[]>([]);
+  const [loadingOriginalInvoices, setLoadingOriginalInvoices] = useState(false);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [viewOpen, setViewOpen] = useState(false);
@@ -259,6 +272,104 @@ export const InvoiceManager = () => {
       setInvoicePayments([]);
     }
   }, [viewOpen, selectedInvoice?.id, fetchInvoicePayments]);
+
+  const refreshEligibleOriginalInvoices = useCallback(async (
+    returnType: string,
+    entityId?: string
+  ) => {
+    if (!selectedCompany?.company_name || !isReturnInvoiceType(returnType)) {
+      setEligibleOriginalInvoices([]);
+      return;
+    }
+    setLoadingOriginalInvoices(true);
+    try {
+      const list = await fetchEligibleOriginalInvoices({
+        companyName: selectedCompany.company_name,
+        returnType,
+        entityId: entityId || undefined,
+      });
+      setEligibleOriginalInvoices(list);
+    } finally {
+      setLoadingOriginalInvoices(false);
+    }
+  }, [selectedCompany?.company_name]);
+
+  const loadOriginalInvoiceItems = async (invoiceId: string) => {
+    try {
+      const items = await loadReturnableLineItems(invoiceId);
+      if (items.length === 0) {
+        toast({
+          title: "No returnable items",
+          description: "This invoice has no remaining quantity available to return.",
+          variant: "destructive",
+        });
+        return;
+      }
+      const hasReturnable = items.some((i) => i.max_quantity > 0);
+      if (!hasReturnable) {
+        toast({
+          title: "Fully returned",
+          description: "All items on this invoice have already been returned.",
+          variant: "destructive",
+        });
+      }
+      setLineItems(items);
+      toast({
+        title: "Original invoice loaded",
+        description: "Set return quantity for each item (0 to skip, max = remaining qty).",
+      });
+    } catch (error) {
+      logger.error('Failed to load original invoice items:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load items from original invoice",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleOriginalInvoiceSelect = async (invoiceId: string) => {
+    setSelectedOriginalInvoice(invoiceId);
+    setSelectedPO("");
+    setPOItems([]);
+    if (!invoiceId) {
+      setLineItems([{
+        product_id: undefined,
+        description: "",
+        quantity: 0,
+        unit_price: 0,
+        gst_rate: 18,
+        max_quantity: undefined,
+      }]);
+      return;
+    }
+    try {
+      const original = await fetchOriginalInvoiceSummary(invoiceId);
+      if (original.entity_id && original.entity_type) {
+        setFormData((prev) => ({
+          ...prev,
+          entity_id: original.entity_id,
+          entity_type: original.entity_type,
+        }));
+      }
+      await loadOriginalInvoiceItems(invoiceId);
+    } catch (error) {
+      logger.error('handleOriginalInvoiceSelect:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (isReturnInvoiceType(formData.invoice_type)) {
+      refreshEligibleOriginalInvoices(formData.invoice_type, formData.entity_id || undefined);
+    } else {
+      setEligibleOriginalInvoices([]);
+      setSelectedOriginalInvoice("");
+    }
+  }, [
+    formData.invoice_type,
+    formData.entity_id,
+    refreshEligibleOriginalInvoices,
+  ]);
 
   const fetchInvoices = async () => {
     try {
@@ -679,6 +790,27 @@ export const InvoiceManager = () => {
         return;
       }
 
+      if (isReturnInvoiceType(formData.invoice_type)) {
+        if (!selectedOriginalInvoice) {
+          toast({
+            title: "Validation Error",
+            description: "Please select the original invoice this return is against",
+            variant: "destructive",
+          });
+          return;
+        }
+        for (const item of validLineItems) {
+          if (item.max_quantity !== undefined && item.quantity > item.max_quantity) {
+            toast({
+              title: "Validation Error",
+              description: `Return quantity for "${item.description}" cannot exceed ${item.max_quantity}`,
+              variant: "destructive",
+            });
+            return;
+          }
+        }
+      }
+
       // Calculate totals using valid line items only
       const totals = calculateTotals();
       
@@ -742,7 +874,10 @@ export const InvoiceManager = () => {
           total_amount: totals.total,
           notes: formData.notes || null,
           user_id: user.id,
-          company_id: selectedCompany.company_name
+          company_id: selectedCompany.company_name,
+          original_invoice_id: isReturnInvoiceType(formData.invoice_type)
+            ? selectedOriginalInvoice
+            : null,
         }])
         .select()
         .single();
@@ -771,7 +906,10 @@ export const InvoiceManager = () => {
                 discount_percentage: formData.discount_percentage || 0,
                 notes: formData.notes || null,
                 user_id: user.id,
-                company_id: selectedCompany.company_name
+                company_id: selectedCompany.company_name,
+                original_invoice_id: isReturnInvoiceType(formData.invoice_type)
+                  ? selectedOriginalInvoice
+                  : null,
               }])
               .select()
               .single();
@@ -836,6 +974,7 @@ export const InvoiceManager = () => {
             selectedCompany.company_name,
             mapping
           );
+          await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
 
           await postInvoiceToLedger({
             invoiceId: invoice.id,
@@ -1011,6 +1150,28 @@ export const InvoiceManager = () => {
         // For non-inventory invoices (transport, wholesale, labour, other), skip inventory updates
       }
 
+      // Keep Stock-in-Hand ledger aligned with valued inventory
+      try {
+        if (user && selectedCompany?.company_name) {
+          let stockMapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
+          stockMapping = await ensureDefaultChartOfAccounts(
+            user.id,
+            selectedCompany.company_name,
+            stockMapping
+          );
+          await reconcileStockInHandLedger({
+            companyId: selectedCompany.company_name,
+            userId: user.id,
+            mapping: stockMapping,
+            asOfDate: formData.invoice_date,
+            invoiceId: invoice.id,
+            reference: invoice.invoice_number,
+          });
+        }
+      } catch (stockError: any) {
+        logger.error('Stock-in-Hand sync failed (non-blocking):', stockError);
+      }
+
       // Create GST entry for all invoice types (including sale_return and purchase_return)
       // Return invoices create negative GST entries that reduce output/input tax liability
       try {
@@ -1137,7 +1298,23 @@ export const InvoiceManager = () => {
 
       if (error) throw error;
       setInvoiceItems(data || []);
-      setSelectedInvoice(invoice);
+
+      let invoiceForView: Invoice = { ...invoice };
+      if ((invoice as any).original_invoice_id) {
+        const { data: orig } = await (supabase as any)
+          .from('invoices')
+          .select('invoice_number')
+          .eq('id', (invoice as any).original_invoice_id)
+          .maybeSingle();
+        if (orig?.invoice_number) {
+          invoiceForView = {
+            ...invoice,
+            original_invoice_id: (invoice as any).original_invoice_id,
+            original_invoice_number: orig.invoice_number,
+          };
+        }
+      }
+      setSelectedInvoice(invoiceForView);
       
       // Fetch GST breakdown from gst_entries
       const { data: gstData, error: gstError } = await supabase
@@ -1345,6 +1522,7 @@ export const InvoiceManager = () => {
             selectedCompany.company_name,
             mapping
           );
+          await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
 
           await postPaymentToLedger({
             invoiceId: selectedInvoice.id,
@@ -1356,6 +1534,7 @@ export const InvoiceManager = () => {
             companyId: selectedCompany.company_name,
             userId: user.id,
             mapping,
+            invoicePaymentStatus: newPaymentStatus,
           });
         }
       } catch (ledgerError: any) {
@@ -1688,6 +1867,8 @@ export const InvoiceManager = () => {
             setShowDiscountFields(false);
             setSelectedPO("");
             setPOItems([]);
+            setSelectedOriginalInvoice("");
+            setEligibleOriginalInvoices([]);
             // Refresh POs when dialog opens if it's a purchase type
             if (currentInvoiceType === 'purchase' || currentInvoiceType === 'purchase_return') {
               fetchPurchaseOrders(currentInvoiceType);
@@ -1717,18 +1898,29 @@ export const InvoiceManager = () => {
                 <div>
                   <Label htmlFor="invoice_type">Invoice Type</Label>
                   <Select value={formData.invoice_type} onValueChange={(value) => {
-                    setFormData(prev => ({ ...prev, invoice_type: value }));
+                    const nextEntityType = value === 'sale_return' ? 'customer' : formData.entity_type;
+                    setFormData(prev => ({
+                      ...prev,
+                      invoice_type: value,
+                      entity_type: nextEntityType,
+                      entity_id: value === 'sale_return' ? prev.entity_id : prev.entity_id,
+                    }));
                     setSelectedPO("");
                     setPOItems([]);
+                    setSelectedOriginalInvoice("");
                     setLineItems([{
                       product_id: undefined,
                       description: "",
-                      quantity: 1,
+                      quantity: isReturnInvoiceType(value) ? 0 : 1,
                       unit_price: 0,
-                      gst_rate: 18
+                      gst_rate: 18,
+                      max_quantity: undefined,
                     }]);
                     if (value === 'purchase' || value === 'purchase_return') {
                       fetchPurchaseOrders(value);
+                    }
+                    if (isReturnInvoiceType(value)) {
+                      refreshEligibleOriginalInvoices(value, formData.entity_id || undefined);
                     }
                   }}>
                     <SelectTrigger>
@@ -1813,8 +2005,15 @@ export const InvoiceManager = () => {
                   <Select value={formData.entity_id || "open-items"} onValueChange={(value) => {
                     if (value === "open-items") {
                       setFormData(prev => ({ ...prev, entity_id: "" }));
+                      if (isReturnInvoiceType(formData.invoice_type)) {
+                        setSelectedOriginalInvoice("");
+                      }
                     } else {
                       setFormData(prev => ({ ...prev, entity_id: value }));
+                      if (isReturnInvoiceType(formData.invoice_type)) {
+                        setSelectedOriginalInvoice("");
+                        refreshEligibleOriginalInvoices(formData.invoice_type, value);
+                      }
                     }
                   }}>
                     <SelectTrigger className="flex-1">
@@ -1867,13 +2066,76 @@ export const InvoiceManager = () => {
                 )}
               </div>
 
+              {/* Original invoice — required for sale/purchase returns */}
+              {isReturnInvoiceType(formData.invoice_type) && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label htmlFor="original_invoice">
+                      Original {formData.invoice_type === 'sale_return' ? 'Sales' : 'Purchase'} Invoice{' '}
+                      <span className="text-destructive">*</span>
+                    </Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        refreshEligibleOriginalInvoices(
+                          formData.invoice_type,
+                          formData.entity_id || undefined
+                        )
+                      }
+                      className="h-8 text-xs"
+                      title="Refresh invoice list"
+                    >
+                      <Download className="w-3 h-3 mr-1" />
+                      Refresh
+                    </Button>
+                  </div>
+                  <Select
+                    value={selectedOriginalInvoice}
+                    onValueChange={handleOriginalInvoiceSelect}
+                  >
+                    <SelectTrigger className={!selectedOriginalInvoice ? 'border-destructive' : ''}>
+                      <SelectValue placeholder="Select original invoice to return against..." />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-[300px]">
+                      {loadingOriginalInvoices ? (
+                        <SelectItem value="loading" disabled>Loading invoices...</SelectItem>
+                      ) : eligibleOriginalInvoices.length === 0 ? (
+                        <SelectItem value="no-invoices" disabled>
+                          {formData.entity_id
+                            ? 'No invoices found for this entity'
+                            : 'Select an entity first, or no invoices available'}
+                        </SelectItem>
+                      ) : (
+                        eligibleOriginalInvoices.map((inv) => (
+                          <SelectItem key={inv.id} value={inv.id}>
+                            {inv.invoice_number} — {inv.invoice_date} — {formatIndianCurrency(inv.total_amount)}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  {!selectedOriginalInvoice && (
+                    <p className="text-xs text-destructive mt-1">
+                      Required: select the invoice this return is linked to
+                    </p>
+                  )}
+                  {selectedOriginalInvoice && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Line items are loaded from the original invoice. Adjust return quantities below.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Purchase Order Selection for Purchase Invoice and Purchase Return */}
               {/* PO selection only available for suppliers and wholesalers */}
               {(formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return') && 
                (formData.entity_type === 'supplier' || formData.entity_type === 'wholesaler') && (
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <Label htmlFor="purchase_order">Purchase Order {formData.invoice_type === 'purchase_return' ? '(Select PO to return)' : '(Select PO to invoice)'}</Label>
+                    <Label htmlFor="purchase_order">Purchase Order {formData.invoice_type === 'purchase_return' ? '(Optional — or use Original Invoice above)' : '(Select PO to invoice)'}</Label>
                     <Button
                       type="button"
                       variant="ghost"
@@ -1891,6 +2153,7 @@ export const InvoiceManager = () => {
                     onValueChange={async (value) => {
                       setSelectedPO(value);
                       if (value) {
+                        setSelectedOriginalInvoice("");
                         await loadPOItems(value);
                         const po = purchaseOrders.find(p => p.id === value);
                         if (po && po.supplier_id) {
@@ -2744,6 +3007,12 @@ export const InvoiceManager = () => {
                   <p className="text-sm text-muted-foreground">Date</p>
                   <p className="font-medium">{selectedInvoice.invoice_date}</p>
                 </div>
+                {selectedInvoice.original_invoice_number && (
+                  <div className="col-span-2">
+                    <p className="text-sm text-muted-foreground">Return against invoice</p>
+                    <p className="font-medium">{selectedInvoice.original_invoice_number}</p>
+                  </div>
+                )}
               </div>
               
               <div>

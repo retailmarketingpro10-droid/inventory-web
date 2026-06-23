@@ -35,6 +35,23 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
+function partyEntryStatus(paymentStatus: string): 'paid' | 'due' | 'partial' {
+  if (paymentStatus === 'paid') return 'paid';
+  if (paymentStatus === 'partial') return 'partial';
+  return 'due';
+}
+
+const BOOKED = 'paid' as const;
+
+function line(
+  ledger_id: string,
+  amount: number,
+  side: 'debit' | 'credit',
+  status: 'paid' | 'due' | 'partial' = BOOKED
+): LedgerPostingLine {
+  return { ledger_id, amount: round2(amount), side, status };
+}
+
 function pickPartyLedger(
   mapping: LedgerMappingSettings,
   paymentStatus: string,
@@ -64,7 +81,7 @@ function addOutputTaxCredits(
     [igst, mapping.outputIgstAccountId],
   ] as const) {
     if (ledgerId && amount > 0) {
-      lines.push({ ledger_id: ledgerId, amount: round2(amount), side: 'credit' });
+      lines.push(line(ledgerId, amount, 'credit', BOOKED));
     }
   }
 }
@@ -82,7 +99,7 @@ function addInputTaxDebits(
     [igst, mapping.inputIgstAccountId],
   ] as const) {
     if (ledgerId && amount > 0) {
-      lines.push({ ledger_id: ledgerId, amount: round2(amount), side: 'debit' });
+      lines.push(line(ledgerId, amount, 'debit', BOOKED));
     }
   }
 }
@@ -94,68 +111,62 @@ function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostin
   const discount = round2(totals.discountAmount);
   const total = round2(totals.total);
 
+  const partyStatus = partyEntryStatus(paymentStatus);
+
   if (invoiceType === 'sales') {
     const partyId = pickPartyLedger(mapping, paymentStatus, paymentMethod, 'sales');
     const salesId = mapping.salesAccountId;
     if (!partyId || !salesId) return lines;
 
-    lines.push({ ledger_id: partyId, amount: total, side: 'debit' });
+    lines.push(line(partyId, total, 'debit', partyStatus));
     if (discount > 0 && mapping.discountAllowedAccountId) {
-      lines.push({
-        ledger_id: mapping.discountAllowedAccountId,
-        amount: discount,
-        side: 'debit',
-      });
+      lines.push(line(mapping.discountAllowedAccountId, discount, 'debit', BOOKED));
     }
-    lines.push({ ledger_id: salesId, amount: round2(taxable + discount), side: 'credit' });
+    lines.push(line(salesId, taxable + discount, 'credit', BOOKED));
     addOutputTaxCredits(lines, mapping, totals.cgst, totals.sgst, totals.igst);
   } else if (invoiceType === 'sale_return') {
     const partyId = pickPartyLedger(mapping, paymentStatus, paymentMethod, 'sales');
     const salesId = mapping.salesAccountId;
     if (!partyId || !salesId) return lines;
 
-    lines.push({ ledger_id: salesId, amount: round2(taxable + discount), side: 'debit' });
+    lines.push(line(salesId, taxable + discount, 'debit', BOOKED));
     for (const [amount, ledgerId] of [
       [totals.cgst, mapping.outputCgstAccountId],
       [totals.sgst, mapping.outputSgstAccountId],
       [totals.igst, mapping.outputIgstAccountId],
     ] as const) {
       if (ledgerId && amount > 0) {
-        lines.push({ ledger_id: ledgerId, amount: round2(amount), side: 'debit' });
+        lines.push(line(ledgerId, amount, 'debit', BOOKED));
       }
     }
-    lines.push({ ledger_id: partyId, amount: total, side: 'credit' });
+    lines.push(line(partyId, total, 'credit', partyStatus));
   } else if (invoiceType === 'purchase') {
     const partyId = pickPartyLedger(mapping, paymentStatus, paymentMethod, 'purchase');
     const purchaseId = mapping.purchaseAccountId;
     if (!partyId || !purchaseId) return lines;
 
-    lines.push({ ledger_id: purchaseId, amount: round2(taxable + discount), side: 'debit' });
+    lines.push(line(purchaseId, taxable + discount, 'debit', BOOKED));
     addInputTaxDebits(lines, mapping, totals.cgst, totals.sgst, totals.igst);
     if (discount > 0 && mapping.discountReceivedAccountId) {
-      lines.push({
-        ledger_id: mapping.discountReceivedAccountId,
-        amount: discount,
-        side: 'credit',
-      });
+      lines.push(line(mapping.discountReceivedAccountId, discount, 'credit', BOOKED));
     }
-    lines.push({ ledger_id: partyId, amount: total, side: 'credit' });
+    lines.push(line(partyId, total, 'credit', partyStatus));
   } else if (invoiceType === 'purchase_return') {
     const partyId = pickPartyLedger(mapping, paymentStatus, paymentMethod, 'purchase');
     const purchaseId = mapping.purchaseAccountId;
     if (!partyId || !purchaseId) return lines;
 
-    lines.push({ ledger_id: partyId, amount: total, side: 'debit' });
+    lines.push(line(partyId, total, 'debit', partyStatus));
     for (const [amount, ledgerId] of [
       [totals.cgst, mapping.inputCgstAccountId],
       [totals.sgst, mapping.inputSgstAccountId],
       [totals.igst, mapping.inputIgstAccountId],
     ] as const) {
       if (ledgerId && amount > 0) {
-        lines.push({ ledger_id: ledgerId, amount: round2(amount), side: 'credit' });
+        lines.push(line(ledgerId, amount, 'credit', BOOKED));
       }
     }
-    lines.push({ ledger_id: purchaseId, amount: round2(taxable + discount), side: 'credit' });
+    lines.push(line(purchaseId, taxable + discount, 'credit', BOOKED));
   }
 
   return lines.filter((l) => l.amount > 0);
@@ -226,6 +237,42 @@ export interface PostPaymentLedgerParams {
   companyId: string;
   userId: string;
   mapping: LedgerMappingSettings;
+  invoicePaymentStatus?: string;
+}
+
+async function updatePartyEntryStatusForInvoice(
+  invoiceId: string,
+  userId: string,
+  mapping: LedgerMappingSettings,
+  paymentStatus: string
+) {
+  const partyLedgerIds = [
+    mapping.sundryDebtorsAccountId,
+    mapping.sundryCreditorsAccountId,
+  ].filter(Boolean) as string[];
+
+  if (!partyLedgerIds.length) return;
+
+  const entryStatus = partyEntryStatus(paymentStatus);
+
+  const { data: txs } = await (supabase as any)
+    .from('ledger_transactions')
+    .select('id, voucher_type')
+    .eq('invoice_id', invoiceId);
+
+  const invoiceTxIds = (txs || [])
+    .filter((t: any) => t.voucher_type !== 'receipt' && t.voucher_type !== 'payment')
+    .map((t: any) => t.id);
+
+  if (!invoiceTxIds.length) return;
+
+  await (supabase as any)
+    .from('ledger_entries')
+    .update({ status: entryStatus })
+    .in('transaction_id', invoiceTxIds)
+    .in('ledger_id', partyLedgerIds)
+    .eq('user_id', userId)
+    .gt('debit_amount', 0);
 }
 
 export async function postPaymentToLedger(
@@ -253,11 +300,11 @@ export async function postPaymentToLedger(
       throw new Error('Cash/Bank and Sundry Debtors must be mapped for receipt vouchers.');
     }
     if (params.invoiceType === 'sales') {
-      lines.push({ ledger_id: cashOrBank, amount, side: 'debit' });
-      lines.push({ ledger_id: debtors, amount, side: 'credit' });
+      lines.push(line(cashOrBank, amount, 'debit', BOOKED));
+      lines.push(line(debtors, amount, 'credit', BOOKED));
     } else {
-      lines.push({ ledger_id: debtors, amount, side: 'debit' });
-      lines.push({ ledger_id: cashOrBank, amount, side: 'credit' });
+      lines.push(line(debtors, amount, 'debit', BOOKED));
+      lines.push(line(cashOrBank, amount, 'credit', BOOKED));
     }
   } else {
     const creditors = params.mapping.sundryCreditorsAccountId;
@@ -265,11 +312,11 @@ export async function postPaymentToLedger(
       throw new Error('Cash/Bank and Sundry Creditors must be mapped for payment vouchers.');
     }
     if (params.invoiceType === 'purchase') {
-      lines.push({ ledger_id: creditors, amount, side: 'debit' });
-      lines.push({ ledger_id: cashOrBank, amount, side: 'credit' });
+      lines.push(line(creditors, amount, 'debit', BOOKED));
+      lines.push(line(cashOrBank, amount, 'credit', BOOKED));
     } else {
-      lines.push({ ledger_id: cashOrBank, amount, side: 'debit' });
-      lines.push({ ledger_id: creditors, amount, side: 'credit' });
+      lines.push(line(cashOrBank, amount, 'debit', BOOKED));
+      lines.push(line(creditors, amount, 'credit', BOOKED));
     }
   }
 
@@ -285,6 +332,15 @@ export async function postPaymentToLedger(
     invoiceId: params.invoiceId,
     referenceNumber: params.invoiceNumber,
   });
+
+  if (params.invoicePaymentStatus) {
+    await updatePartyEntryStatusForInvoice(
+      params.invoiceId,
+      params.userId,
+      params.mapping,
+      params.invoicePaymentStatus
+    );
+  }
 
   return { transactionId };
 }

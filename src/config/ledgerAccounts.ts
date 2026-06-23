@@ -44,11 +44,14 @@ export interface LedgerMappingSettings {
   postOnInvoice?: boolean;
   /** Post receipt/payment voucher when payment is recorded */
   postOnPayment?: boolean;
+  /** Keep Stock-in-Hand ledger balance aligned with product inventory value */
+  syncStockToLedger?: boolean;
 }
 
 export const DEFAULT_LEDGER_MAPPING: LedgerMappingSettings = {
   postOnInvoice: true,
   postOnPayment: true,
+  syncStockToLedger: true,
   directExpenseAccountIds: [],
   indirectExpenseAccountIds: [],
   indirectIncomeAccountIds: [],
