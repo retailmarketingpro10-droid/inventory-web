@@ -46,6 +46,7 @@ import {
   generateProfitAndLossFromLedger,
   generateTrialBalanceFromLedger,
 } from '@/services/ledgerReportService';
+import { generatePaymentReport, paymentMethodLabel } from '@/services/paymentReportService';
 import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
 import { GSTSyncService } from '@/services/gstSyncService';
 import { getCurrentFinancialYear } from '@/utils/indianBusiness';
@@ -884,156 +885,33 @@ export const ReportsManager: React.FC = () => {
         case 'payment-report': {
           try {
             const { data: { user } } = await supabase.auth.getUser();
-            
-            if (!user?.id) {
-              toast({
-                title: "Error",
-                description: "User not authenticated",
-                variant: "destructive"
-              });
-              throw new Error('User not authenticated');
-            }
-            
-            // Fetch payable ledgers (accounts payable)
-            const { data: payableLedgers, error: payableError } = await (supabase as any).from('ledgers')
-              .select('id, name, current_balance, opening_balance')
-              .eq('company_id', selectedCompany.company_name)
-              .eq('ledger_type', 'payables');
+            if (!user?.id) throw new Error('User not authenticated');
 
-            if (payableError) {
-              logger.error('Error fetching payable ledgers:', payableError);
-            }
-
-            // Fetch receivable ledgers (accounts receivable)
-            const { data: receivableLedgers, error: receivableError } = await (supabase as any).from('ledgers')
-              .select('id, name, current_balance, opening_balance')
-              .eq('company_id', selectedCompany.company_name)
-              .eq('ledger_type', 'receivables');
-
-            if (receivableError) {
-              logger.error('Error fetching receivable ledgers:', receivableError);
-            }
-
-          // Fetch ledger entries for payable and receivable ledgers
-          const payableLedgerIds = (payableLedgers || []).map(l => l.id);
-          const receivableLedgerIds = (receivableLedgers || []).map(l => l.id);
-          const allLedgerIds = [...payableLedgerIds, ...receivableLedgerIds];
-
-          let ledgerEntries: any[] = [];
-          if (allLedgerIds.length > 0 && user?.id) {
-            const { data: entriesData } = await (supabase as any).from('ledger_entries')
-              .select('ledger_id, debit_amount, credit_amount, description, entry_date')
-              .in('ledger_id', allLedgerIds)
-              .eq('user_id', user.id)
-              .gte('entry_date', dateFrom)
-              .lte('entry_date', dateTo)
-              .order('entry_date', { ascending: false });
-            ledgerEntries = entriesData || [];
-          }
-
-          // Fetch sales invoices
-          const { data: salesInvoices } = await (supabase as any).from('invoices')
-            .select('invoice_number, invoice_date, total_amount, invoice_type, payment_status, business_entities(name), suppliers(company_name)')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'sales')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo)
-            .order('invoice_date', { ascending: false });
-
-          // Fetch purchase invoices
-          const { data: purchaseInvoices } = await (supabase as any).from('invoices')
-            .select('invoice_number, invoice_date, total_amount, invoice_type, payment_status, suppliers(company_name), business_entities(name)')
-            .eq('company_id', selectedCompany.company_name)
-            .eq('invoice_type', 'purchase')
-            .gte('invoice_date', dateFrom)
-            .lte('invoice_date', dateTo)
-            .order('invoice_date', { ascending: false });
-
-          // Map payable ledger entries
-          const payableEntries = ledgerEntries
-            .filter(e => payableLedgerIds.includes(e.ledger_id))
-            .map(e => {
-              const ledger = payableLedgers?.find(l => l.id === e.ledger_id);
-              return {
-                subcategory: ledger?.name || 'Payable',
-                amount: e.debit_amount || 0,
-                category: new Date(e.entry_date).toLocaleDateString('en-IN'),
-                description: e.description,
-                entry_date: e.entry_date,
-                record_type: 'Payable Ledger',
-                payment_status: 'due'
-              };
+            const pr = await generatePaymentReport({
+              companyName: selectedCompany.company_name,
+              userId: user.id,
+              dateFrom,
+              dateTo,
             });
-
-          // Map receivable ledger entries
-          const receivableEntries = ledgerEntries
-            .filter(e => receivableLedgerIds.includes(e.ledger_id))
-            .map(e => {
-              const ledger = receivableLedgers?.find(l => l.id === e.ledger_id);
-              return {
-                subcategory: ledger?.name || 'Receivable',
-                amount: e.credit_amount || 0,
-                category: new Date(e.entry_date).toLocaleDateString('en-IN'),
-                description: e.description,
-                entry_date: e.entry_date,
-                record_type: 'Receivable Ledger',
-                payment_status: 'due'
-              };
-            });
-
-          // Map sales invoices
-          const salesInvoiceRows = (salesInvoices || []).map(inv => ({
-            subcategory: inv.invoice_number || '',
-            amount: inv.total_amount || 0,
-            category: new Date(inv.invoice_date).toLocaleDateString('en-IN'),
-            invoice_number: inv.invoice_number,
-            invoice_date: inv.invoice_date,
-            customer: inv.business_entities?.name || inv.suppliers?.company_name || 'N/A',
-            record_type: 'Sales Invoice',
-            payment_status: inv.payment_status || 'due'
-          }));
-
-          // Map purchase invoices
-          const purchaseInvoiceRows = (purchaseInvoices || []).map(inv => ({
-            subcategory: inv.invoice_number || '',
-            amount: inv.total_amount || 0,
-            category: new Date(inv.invoice_date).toLocaleDateString('en-IN'),
-            invoice_number: inv.invoice_number,
-            invoice_date: inv.invoice_date,
-            supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'N/A',
-            record_type: 'Purchase Invoice',
-            payment_status: inv.payment_status || 'due'
-          }));
-
-          // Combine all entries
-          sampleData = [...payableEntries, ...receivableEntries, ...salesInvoiceRows, ...purchaseInvoiceRows];
-
-          // Calculate totals
-          const totalPayables = payableEntries.reduce((sum, e) => sum + (e.amount || 0), 0);
-          const totalReceivables = receivableEntries.reduce((sum, e) => sum + (e.amount || 0), 0);
-          const totalSales = (salesInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-          const totalPurchases = (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-
-          newSummary = {
-            totalSales: totalReceivables + totalSales,
-            totalPurchases: totalPayables + totalPurchases,
-            grossProfit: sampleData.length,
-            netProfit: (totalReceivables + totalSales) - (totalPayables + totalPurchases)
-          };
-          console.log(`Payment report: ${sampleData.length} entries found`);
+            sampleData = pr.rows;
+            newSummary = pr.summary;
           } catch (error: any) {
             logger.error('Payment report error:', error);
             toast({
-              title: "Error",
-              description: error?.message || "Failed to generate payment report",
-              variant: "destructive"
+              title: 'Error',
+              description: error?.message || 'Failed to generate payment report',
+              variant: 'destructive',
             });
             sampleData = [];
             newSummary = {
               totalSales: 0,
               totalPurchases: 0,
               grossProfit: 0,
-              netProfit: 0
+              netProfit: 0,
+              cashTotal: 0,
+              bankTotal: 0,
+              otherTotal: 0,
+              totalPayments: 0,
             };
           }
           break;
@@ -1594,21 +1472,48 @@ export const ReportsManager: React.FC = () => {
         // Create summary array with proper labels based on report type
         const summaryItems = [];
         if (selectedReport === 'ledger-summary') {
-          // Ledger summary specific labels
-          if (summary.totalSales !== 0) {
-            summaryItems.push({ label: 'Total Credits', value: summary.totalSales, format: 'currency' as const });
+          if ((summary as any).totalAssets) {
+            summaryItems.push({
+              label: 'Total Assets',
+              value: (summary as any).totalAssets,
+              format: 'currency' as const,
+            });
           }
-          if (summary.totalPurchases !== 0) {
-            summaryItems.push({ label: 'Total Debits', value: summary.totalPurchases, format: 'currency' as const });
+          if ((summary as any).totalLiabilities) {
+            summaryItems.push({
+              label: 'Total Liabilities',
+              value: (summary as any).totalLiabilities,
+              format: 'currency' as const,
+            });
           }
-          if (summary.grossProfit !== 0) {
-            summaryItems.push({ label: 'Net Change', value: summary.grossProfit, format: 'currency' as const });
+          if ((summary as any).totalIncome) {
+            summaryItems.push({
+              label: 'Total Income',
+              value: (summary as any).totalIncome,
+              format: 'currency' as const,
+            });
           }
-          if (summary.netProfit !== 0) {
-            summaryItems.push({ label: 'Total Closing Balance', value: summary.netProfit, format: 'currency' as const });
+          if ((summary as any).totalExpenses) {
+            summaryItems.push({
+              label: 'Total Expenses',
+              value: (summary as any).totalExpenses,
+              format: 'currency' as const,
+            });
+          }
+        } else if (selectedReport === 'payment-report') {
+          if (summary.totalSales) {
+            summaryItems.push({ label: 'Total Receipts', value: summary.totalSales, format: 'currency' as const });
+          }
+          if (summary.totalPurchases) {
+            summaryItems.push({ label: 'Total Payments Out', value: summary.totalPurchases, format: 'currency' as const });
+          }
+          if ((summary as any).cashTotal) {
+            summaryItems.push({ label: 'Cash', value: (summary as any).cashTotal, format: 'currency' as const });
+          }
+          if ((summary as any).bankTotal) {
+            summaryItems.push({ label: 'Bank / UPI', value: (summary as any).bankTotal, format: 'currency' as const });
           }
         } else {
-          // Standard summary labels for other reports
           if (summary.totalSales !== 0) {
             summaryItems.push({ label: 'Total Sales', value: summary.totalSales, format: 'currency' as const });
           }
@@ -1985,10 +1890,33 @@ export const ReportsManager: React.FC = () => {
                             {row.subcategory || '-'}
                           </TableCell>
                           <TableCell className="text-right">
-                            <span className={row.amount < 0 ? 'text-red-500' : 'text-green-500'}>
-                              {formatIndianCurrency(Math.abs(row.amount))}
-                              {row.amount < 0 && ' -'}
-                            </span>
+                            {(() => {
+                              const isDeduction = String(row.subcategory || '').startsWith('Less:');
+                              const isProfitLine =
+                                row.category === 'Gross Profit' ||
+                                row.category === 'Gross Loss' ||
+                                row.category === 'Net Profit' ||
+                                row.category === 'Net Loss';
+                              const amount = Number(row.amount) || 0;
+                              const displayAmount = Math.abs(amount);
+                              const isLoss = isProfitLine ? amount < 0 : false;
+                              return (
+                                <span
+                                  className={
+                                    isLoss
+                                      ? 'text-red-500'
+                                      : isDeduction
+                                        ? 'text-orange-500'
+                                        : amount < 0
+                                          ? 'text-red-500'
+                                          : 'text-green-500'
+                                  }
+                                >
+                                  {isDeduction || isLoss ? '−' : ''}
+                                  {formatIndianCurrency(displayAmount)}
+                                </span>
+                              );
+                            })()}
                           </TableCell>
                         </>
                       )}
@@ -2105,20 +2033,25 @@ export const ReportsManager: React.FC = () => {
                       )}
                       {selectedReport === 'payment-report' && (
                         <>
-                          <TableCell className="font-medium">{row.payment_method === 'cash' ? 'Cash Payment' : row.payment_method === 'bank_transfer' ? 'Bank Transfer' : row.payment_method || 'Cash'}</TableCell>
-                          <TableCell>{row.invoice_date ? formatDate(row.invoice_date) : row.category}</TableCell>
-                          <TableCell>{row.invoice_number || `REF-${index + 1}`}</TableCell>
+                          <TableCell className="font-medium">{row.record_type || 'Payment'}</TableCell>
+                          <TableCell>
+                            {row.payment_date
+                              ? formatDate(row.payment_date)
+                              : row.invoice_date
+                                ? formatDate(row.invoice_date)
+                                : row.category}
+                          </TableCell>
+                          <TableCell>{row.invoice_number || row.subcategory || '—'}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(row.amount)}</TableCell>
                           <TableCell>
                             <Badge variant="outline">
-                              {row.payment_method === 'bank_transfer' ? 'Bank Transfer' : 
-                               row.payment_method === 'upi' ? 'UPI' :
-                               row.payment_method === 'cheque' ? 'Cheque' :
-                               row.payment_method === 'credit_card' ? 'Credit Card' : 'Cash'}
+                              {paymentMethodLabel(row.payment_method || 'cash')}
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="default">Completed</Badge>
+                            <Badge variant="default">
+                              {row.payment_status === 'completed' ? 'Completed' : row.payment_status || 'Completed'}
+                            </Badge>
                           </TableCell>
                         </>
                       )}
@@ -2256,20 +2189,24 @@ export const ReportsManager: React.FC = () => {
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Gross Profit</p>
+                      <p className="text-sm text-muted-foreground">
+                        {summary.grossProfit < 0 ? 'Gross Loss' : 'Gross Profit'}
+                      </p>
                       <p className={`text-lg font-semibold ${summary.grossProfit < 0 ? 'text-red-500' : 'text-green-500'}`}>
+                        {summary.grossProfit < 0 ? '−' : ''}
                         {formatIndianCurrency(Math.abs(summary.grossProfit))}
-                        {summary.grossProfit < 0 && ' -'}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Net Sales - COGS
+                        Net Sales − COGS
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Net Profit</p>
+                      <p className="text-sm text-muted-foreground">
+                        {summary.netProfit < 0 ? 'Net Loss' : 'Net Profit'}
+                      </p>
                       <p className={`text-lg font-semibold ${summary.netProfit < 0 ? 'text-red-500' : 'text-green-500'}`}>
+                        {summary.netProfit < 0 ? '−' : ''}
                         {formatIndianCurrency(Math.abs(summary.netProfit))}
-                        {summary.netProfit < 0 && ' -'}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
                         Gross Profit - Indirect Exp + Indirect Income
@@ -2578,27 +2515,27 @@ export const ReportsManager: React.FC = () => {
                 {selectedReport === 'payment-report' && (
                   <>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Total Payments</p>
+                      <p className="text-sm text-muted-foreground">Total Receipts</p>
                       <p className="text-lg font-semibold text-green-500">
-                        {formatIndianCurrency(summary.grossProfit)}
+                        {formatIndianCurrency(summary.totalSales || 0)}
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Cash Payments</p>
+                      <p className="text-sm text-muted-foreground">Total Payments Out</p>
+                      <p className="text-lg font-semibold text-red-500">
+                        {formatIndianCurrency(summary.totalPurchases || 0)}
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Cash</p>
                       <p className="text-lg font-semibold text-blue-500">
-                        {formatIndianCurrency(5000)}
+                        {formatIndianCurrency((summary as any).cashTotal || 0)}
                       </p>
                     </div>
                     <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Bank Transfers</p>
+                      <p className="text-sm text-muted-foreground">Bank / UPI / Cheque</p>
                       <p className="text-lg font-semibold text-purple-500">
-                        {formatIndianCurrency(50000)}
-                      </p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">Other Payments</p>
-                      <p className="text-lg font-semibold text-orange-500">
-                        {formatIndianCurrency(40000)}
+                        {formatIndianCurrency((summary as any).bankTotal || 0)}
                       </p>
                     </div>
                   </>
@@ -2609,25 +2546,25 @@ export const ReportsManager: React.FC = () => {
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Total Assets</p>
                       <p className="text-lg font-semibold text-green-500">
-                        {formatIndianCurrency(225000)}
+                        {formatIndianCurrency((summary as any).totalAssets || 0)}
                       </p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Total Liabilities</p>
                       <p className="text-lg font-semibold text-red-500">
-                        {formatIndianCurrency(75000)}
+                        {formatIndianCurrency((summary as any).totalLiabilities || 0)}
                       </p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Total Income</p>
                       <p className="text-lg font-semibold text-blue-500">
-                        {formatIndianCurrency(100000)}
+                        {formatIndianCurrency((summary as any).totalIncome || 0)}
                       </p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Total Expenses</p>
                       <p className="text-lg font-semibold text-orange-500">
-                        {formatIndianCurrency(60000)}
+                        {formatIndianCurrency((summary as any).totalExpenses || 0)}
                       </p>
                     </div>
                   </>

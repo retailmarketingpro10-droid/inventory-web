@@ -52,6 +52,16 @@ function line(
   return { ledger_id, amount: round2(amount), side, status };
 }
 
+function isBankPayment(method?: string): boolean {
+  return (
+    method === 'bank' ||
+    method === 'bank_transfer' ||
+    method === 'cheque' ||
+    method === 'upi' ||
+    method === 'credit_card'
+  );
+}
+
 function pickPartyLedger(
   mapping: LedgerMappingSettings,
   paymentStatus: string,
@@ -60,7 +70,7 @@ function pickPartyLedger(
 ): string | undefined {
   const isPaid = paymentStatus === 'paid';
   if (isPaid) {
-    if (paymentMethod === 'bank' && mapping.bankAccountId) return mapping.bankAccountId;
+    if (isBankPayment(paymentMethod) && mapping.bankAccountId) return mapping.bankAccountId;
     return mapping.cashAccountId || mapping.bankAccountId;
   }
   return side === 'sales'
@@ -172,14 +182,80 @@ function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostin
   return lines.filter((l) => l.amount > 0);
 }
 
-export async function invoiceAlreadyPosted(invoiceId: string): Promise<boolean> {
-  const { data } = await (supabase as any)
+export async function invoiceAlreadyPosted(
+  invoiceId: string,
+  invoiceNumber?: string
+): Promise<boolean> {
+  const skipTypes = new Set(['receipt', 'payment', 'stock_journal']);
+
+  const { data: byInvoice } = await (supabase as any)
+    .from('ledger_transactions')
+    .select('id, voucher_type')
+    .eq('invoice_id', invoiceId);
+
+  if (
+    (byInvoice || []).some(
+      (t: { voucher_type?: string }) => !skipTypes.has(t.voucher_type || '')
+    )
+  ) {
+    return true;
+  }
+
+  if (!invoiceNumber) return false;
+
+  const { data: byRef } = await (supabase as any)
+    .from('ledger_transactions')
+    .select('id, voucher_type')
+    .eq('reference_number', invoiceNumber);
+
+  if (
+    (byRef || []).some(
+      (t: { voucher_type?: string }) => !skipTypes.has(t.voucher_type || '')
+    )
+  ) {
+    return true;
+  }
+
+  const { data: byLegacy } = await (supabase as any)
+    .from('ledger_transactions')
+    .select('id, voucher_type')
+    .ilike('description', `%${invoiceNumber}%`);
+
+  return (byLegacy || []).some(
+    (t: { voucher_type?: string }) => !skipTypes.has(t.voucher_type || '')
+  );
+}
+
+export async function paymentVoucherAlreadyPosted(
+  invoiceId: string,
+  amount: number,
+  paymentDate: string
+): Promise<boolean> {
+  const { data: txs } = await (supabase as any)
     .from('ledger_transactions')
     .select('id')
     .eq('invoice_id', invoiceId)
-    .limit(1);
+    .in('voucher_type', ['receipt', 'payment'])
+    .eq('transaction_date', paymentDate);
 
-  return (data?.length || 0) > 0;
+  if (!txs?.length) return false;
+
+  const txIds = txs.map((t: { id: string }) => t.id);
+  const { data: entries } = await (supabase as any)
+    .from('ledger_entries')
+    .select('transaction_id, debit_amount, credit_amount')
+    .in('transaction_id', txIds);
+
+  const amountByTx = new Map<string, number>();
+  (entries || []).forEach((e: any) => {
+    const lineAmount = Math.max(Number(e.debit_amount) || 0, Number(e.credit_amount) || 0);
+    amountByTx.set(
+      e.transaction_id,
+      Math.max(amountByTx.get(e.transaction_id) || 0, lineAmount)
+    );
+  });
+
+  return [...amountByTx.values()].some((v) => Math.abs(v - round2(amount)) < 0.01);
 }
 
 export async function postInvoiceToLedger(
@@ -189,7 +265,7 @@ export async function postInvoiceToLedger(
     return { skipped: true };
   }
 
-  if (await invoiceAlreadyPosted(params.invoiceId)) {
+  if (await invoiceAlreadyPosted(params.invoiceId, params.invoiceNumber)) {
     return { skipped: true };
   }
 
@@ -285,8 +361,12 @@ export async function postPaymentToLedger(
   const amount = round2(params.amount);
   if (amount <= 0) return { skipped: true };
 
+  if (await paymentVoucherAlreadyPosted(params.invoiceId, amount, params.paymentDate)) {
+    return { skipped: true };
+  }
+
   const cashOrBank =
-    params.paymentMethod === 'bank'
+    isBankPayment(params.paymentMethod)
       ? params.mapping.bankAccountId || params.mapping.cashAccountId
       : params.mapping.cashAccountId || params.mapping.bankAccountId;
 

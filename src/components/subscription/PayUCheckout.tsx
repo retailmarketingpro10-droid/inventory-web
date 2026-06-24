@@ -4,6 +4,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { logger } from '@/lib/logger';
+import { openSupportEmail } from '@/lib/supportEmail';
 import { Loader2, CreditCard, Shield, Lock } from 'lucide-react';
 
 // PayU Configuration from environment
@@ -122,9 +123,10 @@ export const PayUCheckout: React.FC<PayUCheckoutProps> = ({
     if (!PAYU_MERCHANT_KEY || !PAYU_MERCHANT_SALT) {
       toast({
         title: "Configuration Error",
-        description: "Payment gateway is not properly configured. Please contact support.",
+        description: "Payment gateway is not configured. Use Contact support on the Subscription page.",
         variant: "destructive"
       });
+      openSupportEmail('billing', { userId: user.id, userEmail: user.email });
       return;
     }
 

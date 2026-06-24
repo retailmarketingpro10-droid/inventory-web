@@ -17,9 +17,12 @@ import {
   Building2,
   Info
 } from 'lucide-react';
+import { buildSupportMailtoUrl, SUPPORT_EMAIL } from '@/lib/supportEmail';
 
 const AccountDeletion = () => {
   const navigate = useNavigate();
+  const accountDeletionMailto = buildSupportMailtoUrl('account_deletion');
+  const supportMailto = buildSupportMailtoUrl('support');
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
@@ -83,10 +86,10 @@ const AccountDeletion = () => {
                     <p className="text-white/80 leading-relaxed">
                       Send an email to our support team at{' '}
                       <a 
-                        href="mailto:retailmarketingpro1.0@gmail.com?subject=Account Deletion Request" 
+                        href={accountDeletionMailto}
                         className="text-primary hover:underline font-semibold"
                       >
-                        retailmarketingpro1.0@gmail.com
+                        {SUPPORT_EMAIL}
                       </a>
                       {' '}with the subject line "Account Deletion Request"
                     </p>
@@ -146,7 +149,7 @@ const AccountDeletion = () => {
                   asChild
                   className="w-full bg-gradient-to-r from-primary via-blue-500 to-purple-600 hover:from-primary/90 hover:via-blue-600 hover:to-purple-700"
                 >
-                  <a href="mailto:retailmarketingpro1.0@gmail.com?subject=Account Deletion Request&body=Please delete my account and all associated data.%0D%0A%0D%0ARegistered Email:%0D%0AFull Name:%0D%0A%0D%0AI confirm that I want to permanently delete my account.">
+                  <a href={accountDeletionMailto}>
                     <Mail className="h-4 w-4 mr-2" />
                     Send Deletion Request Email
                   </a>
@@ -285,7 +288,7 @@ const AccountDeletion = () => {
                 className="w-full border-primary/50 text-primary hover:bg-primary/10"
               >
                 <Mail className="h-4 w-4 mr-2" />
-                Open Support Form
+                Open contact support
               </Button>
             </CardContent>
           </Card>
@@ -303,10 +306,10 @@ const AccountDeletion = () => {
                   <div className="flex items-center gap-2 text-primary">
                     <Mail className="h-4 w-4" />
                     <a 
-                      href="mailto:retailmarketingpro1.0@gmail.com" 
+                      href={supportMailto}
                       className="hover:underline font-semibold"
                     >
-                      retailmarketingpro1.0@gmail.com
+                      {SUPPORT_EMAIL}
                     </a>
                   </div>
                 </div>

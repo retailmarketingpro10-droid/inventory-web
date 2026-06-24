@@ -189,10 +189,30 @@ export const LedgerManager = () => {
         .eq('user_id', userData.user.id)
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      let ledgerRows = data || [];
+      if (!ledgerRows.length) {
+        const { data: fallbackData, error: fallbackError } = await (supabase as any)
+          .from('ledgers')
+          .select('*')
+          .eq('company_id', selectedCompany.company_name)
+          .eq('user_id', userData.user.id)
+          .order('created_at', { ascending: false });
+        if (fallbackError) throw fallbackError;
+        ledgerRows = fallbackData || [];
+      }
+
+      const seenNames = new Set<string>();
+      ledgerRows = ledgerRows.filter((ledger: any) => {
+        const key = String(ledger.name || '').toLowerCase();
+        if (seenNames.has(key)) return false;
+        seenNames.add(key);
+        return true;
+      });
+
+      if (error && !ledgerRows.length) throw error;
 
       // Get entry counts separately
-      const ledgersWithCount = await Promise.all((data || []).map(async (ledger: any) => {
+      const ledgersWithCount = await Promise.all((ledgerRows || []).map(async (ledger: any) => {
         const { count } = await (supabase as any)
           .from('ledger_entries')
           .select('*', { count: 'exact', head: true })
@@ -234,8 +254,8 @@ export const LedgerManager = () => {
         .select('*')
         .eq('ledger_id', selectedLedger)
         .eq('user_id', userData.user.id)
-        .eq('financial_year', selectedFinancialYear)
-        .order('entry_date', { ascending: false });
+        .order('entry_date', { ascending: false })
+        .order('created_at', { ascending: false });
 
       if (error) {
         logger.error('Error fetching ledger entries:', error);

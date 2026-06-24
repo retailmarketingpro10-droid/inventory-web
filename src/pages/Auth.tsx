@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardContent, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Textarea } from '@/components/ui/textarea';
 import { 
   Loader2, 
   Package, 
@@ -18,12 +17,7 @@ import {
   Sparkles, 
   AlertCircle, 
   ExternalLink, 
-  Send,
   Warehouse,
-  User,
-  Phone,
-  Building2,
-  MessageSquare,
   ArrowRight,
   CheckCircle,
   Star,
@@ -32,10 +26,8 @@ import {
   Info
 } from 'lucide-react';
 import { toast } from 'sonner';
-
-// Web3Forms Access Key - Get yours from https://web3forms.com
-const WEB3FORMS_ACCESS_KEY = import.meta.env.VITE_WEB3FORMS_ACCESS_KEY || 'YOUR_ACCESS_KEY_HERE';
-const ADMIN_EMAIL = 'retailmarketingpro1.0@gmail.com';
+import { ContactSupportPanel } from '@/components/support/ContactSupportPanel';
+import { buildSupportMailtoUrl, SUPPORT_EMAIL } from '@/lib/supportEmail';
 
 const Auth = () => {
   const [isLoading, setIsLoading] = useState(false);
@@ -48,16 +40,6 @@ const Auth = () => {
   const [isRecoveryMode, setIsRecoveryMode] = useState(false);
   const isRecoveryModeRef = useRef(false);
   
-  // Contact form states
-  const [isSubmittingContact, setIsSubmittingContact] = useState(false);
-  const [contactFormData, setContactFormData] = useState({
-    fullName: '',
-    email: '',
-    mobileNumber: '',
-    businessType: '',
-    message: ''
-  });
-
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const navigate = useNavigate();
   
@@ -283,128 +265,6 @@ const Auth = () => {
       setError('An unexpected error occurred during signup');
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleContactSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmittingContact(true);
-
-    try {
-      // Save to database
-      const { error: dbError } = await supabase
-        .from('contact_inquiries')
-        .insert([{
-          full_name: contactFormData.fullName,
-          email: contactFormData.email,
-          mobile_number: contactFormData.mobileNumber,
-          business_type: contactFormData.businessType || null,
-          message: contactFormData.message
-        }]);
-
-      if (dbError) throw dbError;
-
-      // Prepare email content for admin
-      const adminEmailBody = `
-New Contact Form Submission
-
-Full Name: ${contactFormData.fullName}
-Email Address: ${contactFormData.email}
-Mobile Number: ${contactFormData.mobileNumber}
-${contactFormData.businessType ? `Business Type: ${contactFormData.businessType}\n` : ''}
-
-Message:
-${contactFormData.message}
-
----
-This email was sent from the Inventory Migrator contact form.
-      `.trim();
-
-      // Send email to admin using Web3Forms
-      try {
-        const adminEmailResponse = await fetch('https://api.web3forms.com/submit', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            access_key: WEB3FORMS_ACCESS_KEY,
-            subject: `New Contact Form Submission from ${contactFormData.fullName}`,
-            from_name: 'Inventory Migrator Contact Form',
-            email: ADMIN_EMAIL,
-            message: adminEmailBody,
-            replyto: contactFormData.email,
-          }),
-        });
-
-        const adminResult = await adminEmailResponse.json();
-        
-        if (!adminEmailResponse.ok || !adminResult.success) {
-          logger.error('Admin email sending failed:', adminResult);
-        }
-      } catch (adminEmailErr) {
-        logger.error('Error sending admin email:', adminEmailErr);
-      }
-
-      // Send confirmation email to user immediately
-      try {
-        const userConfirmationBody = `
-Dear ${contactFormData.fullName},
-
-Thank you for contacting us! We have received your message and will get back to you soon.
-
-Your submission details:
-- Email: ${contactFormData.email}
-- Mobile: ${contactFormData.mobileNumber}
-${contactFormData.businessType ? `- Business Type: ${contactFormData.businessType}\n` : ''}
-
-Your Message:
-${contactFormData.message}
-
-Our team will review your inquiry and contact you at the earliest convenience.
-
-Best regards,
-Inventory Migrator Team
-        `.trim();
-
-        const userEmailResponse = await fetch('https://api.web3forms.com/submit', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            access_key: WEB3FORMS_ACCESS_KEY,
-            subject: 'Thank You for Contacting Us - Inventory Migrator',
-            from_name: 'Inventory Migrator',
-            email: contactFormData.email,
-            message: userConfirmationBody,
-          }),
-        });
-
-        const userResult = await userEmailResponse.json();
-        
-        if (userEmailResponse.ok && userResult.success) {
-          toast.success('Thank you! We have sent a confirmation email to your inbox.');
-        } else {
-          toast.success('Thank you! Our team will contact you soon.');
-        }
-      } catch (userEmailErr) {
-        logger.error('Error sending user confirmation email:', userEmailErr);
-        toast.success('Thank you! Our team will contact you soon.');
-      }
-      
-      // Reset form
-      setContactFormData({
-        fullName: '',
-        email: '',
-        mobileNumber: '',
-        businessType: '',
-        message: ''
-      });
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to submit. Please try again.');
-    } finally {
-      setIsSubmittingContact(false);
     }
   };
 
@@ -840,7 +700,14 @@ Inventory Migrator Team
                         To request deletion of your account and all associated data, please follow these steps:
                       </p>
                       <ol className="list-decimal list-inside space-y-2 text-white/90 text-sm mb-4 ml-2">
-                        <li>Send an email to <a href="mailto:retailmarketingpro1.0@gmail.com?subject=Account Deletion Request" className="text-primary hover:underline font-semibold">retailmarketingpro1.0@gmail.com</a> with subject "Account Deletion Request"</li>
+                        <li>Send an email to{' '}
+                          <a
+                            href={buildSupportMailtoUrl('account_deletion')}
+                            className="text-primary hover:underline font-semibold"
+                          >
+                            {SUPPORT_EMAIL}
+                          </a>{' '}
+                          with subject &quot;Account Deletion Request&quot;</li>
                         <li>Include your registered email address and full name</li>
                         <li>Confirm that you want to permanently delete your account</li>
                         <li>Your request will be processed within 7-14 business days</li>
@@ -851,7 +718,7 @@ Inventory Migrator Team
                           variant="destructive"
                           className="flex-1"
                         >
-                          <a href="mailto:retailmarketingpro1.0@gmail.com?subject=Account Deletion Request&body=Please delete my account and all associated data.%0D%0A%0D%0ARegistered Email:%0D%0AFull Name:%0D%0A%0D%0AI confirm that I want to permanently delete my account.">
+                          <a href={buildSupportMailtoUrl('account_deletion')}>
                             <Mail className="h-4 w-4 mr-2" />
                             Send Deletion Request
                           </a>
@@ -874,137 +741,38 @@ Inventory Migrator Team
                   </div>
                 </div>
 
-                <div className="border-t border-white/10 pt-6 mb-6">
-                  <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                    <MessageSquare className="h-5 w-5 text-primary" />
-                    General Support Contact Form
-                  </h3>
+                <div className="border-t border-white/10 pt-6 mb-2">
+                  <ContactSupportPanel
+                    title="General support"
+                    description="Billing, technical issues, or questions — opens your email app with app version and user ID pre-filled."
+                    className="text-white [&_h3]:text-white [&_label]:text-white/90"
+                  />
                 </div>
 
-                <form onSubmit={handleContactSubmit} className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Full Name */}
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-name" className="text-sm font-bold flex items-center gap-2">
-                        <User className="h-4 w-4 text-primary" />
-                        Full Name <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="contact-name"
-                        type="text"
-                        placeholder="Enter your full name"
-                        value={contactFormData.fullName}
-                        onChange={(e) => setContactFormData({ ...contactFormData, fullName: e.target.value })}
-                        className="h-12 bg-slate-800/50 border-white/10 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 backdrop-blur-sm"
-                        required
-                      />
-                    </div>
-
-                    {/* Email */}
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-email" className="text-sm font-bold flex items-center gap-2">
-                        <Mail className="h-4 w-4 text-primary" />
-                        Email Address <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="contact-email"
-                        type="email"
-                        placeholder="your@email.com"
-                        value={contactFormData.email}
-                        onChange={(e) => setContactFormData({ ...contactFormData, email: e.target.value })}
-                        className="h-12 bg-slate-800/50 border-white/10 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 backdrop-blur-sm"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* Mobile Number */}
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-mobile" className="text-sm font-bold flex items-center gap-2">
-                        <Phone className="h-4 w-4 text-primary" />
-                        Mobile Number <span className="text-destructive">*</span>
-                      </Label>
-                      <Input
-                        id="contact-mobile"
-                        type="tel"
-                        placeholder="9876543210"
-                        value={contactFormData.mobileNumber}
-                        onChange={(e) => setContactFormData({ ...contactFormData, mobileNumber: e.target.value })}
-                        className="h-12 bg-slate-800/50 border-white/10 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 backdrop-blur-sm"
-                        required
-                      />
-                    </div>
-
-                    {/* Business Type */}
-                    <div className="space-y-2">
-                      <Label htmlFor="contact-business" className="text-sm font-bold flex items-center gap-2">
-                        <Building2 className="h-4 w-4 text-primary" />
-                        Business Type <span className="text-muted-foreground">(Optional)</span>
-                      </Label>
-                      <Input
-                        id="contact-business"
-                        type="text"
-                        placeholder="e.g., Retail, Restaurant, Healthcare"
-                        value={contactFormData.businessType}
-                        onChange={(e) => setContactFormData({ ...contactFormData, businessType: e.target.value })}
-                        className="h-12 bg-slate-800/50 border-white/10 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 backdrop-blur-sm"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Message */}
-                  <div className="space-y-2">
-                    <Label htmlFor="contact-message" className="text-sm font-bold flex items-center gap-2">
-                      <MessageSquare className="h-4 w-4 text-primary" />
-                      Message <span className="text-destructive">*</span>
-                    </Label>
-                    <Textarea
-                      id="contact-message"
-                      placeholder="Tell us about your business and setup requirements..."
-                      value={contactFormData.message}
-                      onChange={(e) => setContactFormData({ ...contactFormData, message: e.target.value })}
-                      className="min-h-[140px] bg-slate-800/50 border-white/10 focus:border-primary/50 focus:ring-2 focus:ring-primary/30 resize-y backdrop-blur-sm"
-                      required
-                    />
-                  </div>
-
-                  {/* Submit button */}
-                  <Button 
-                    type="submit" 
-                    className="w-full h-14 text-lg font-black bg-gradient-to-r from-primary via-blue-500 to-purple-600 hover:from-primary/90 hover:via-blue-600 hover:to-purple-700 shadow-2xl hover:shadow-primary/50 transition-all duration-500 transform hover:scale-[1.02] active:scale-[0.98] rounded-lg relative overflow-hidden group" 
-                    disabled={isSubmittingContact}
+                <p className="text-center text-sm text-muted-foreground pt-4">
+                  Manage or cancel subscription?{' '}
+                  <button
+                    type="button"
+                    onClick={() => navigate('/dashboard?tab=subscription')}
+                    className="text-primary hover:text-primary/80 hover:underline font-bold transition-colors duration-200"
                   >
-                    <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></span>
-                    {isSubmittingContact ? (
-                      <>
-                        <Loader2 className="mr-2 h-6 w-6 animate-spin" />
-                        <span className="relative z-10">Sending Message...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Send className="mr-2 h-6 w-6 relative z-10" />
-                        <span className="relative z-10">Send Message</span>
-                        <ArrowRight className="ml-2 h-5 w-5 relative z-10 group-hover:translate-x-1 transition-transform" />
-                      </>
-                    )}
-                  </Button>
+                    Open Subscription
+                  </button>
+                </p>
 
-                  {/* Login link */}
-                  <p className="text-center text-sm text-muted-foreground pt-2">
-                    Already have an account?{' '}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCurrentView('login');
-                        navigate('/auth?view=login');
-                      }}
-                      className="text-primary hover:text-primary/80 hover:underline font-bold transition-colors duration-200"
-                    >
-                      Login here
-                    </button>
-                  </p>
-                </form>
+                <p className="text-center text-sm text-muted-foreground pt-2">
+                  Already have an account?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCurrentView('login');
+                      navigate('/auth?view=login');
+                    }}
+                    className="text-primary hover:text-primary/80 hover:underline font-bold transition-colors duration-200"
+                  >
+                    Login here
+                  </button>
+                </p>
               </CardContent>
             </Card>
           </div>

@@ -23,7 +23,7 @@ export async function getInventoryAsOf(params: {
 
   const { data: products, error: productsError } = await supabase
     .from("products")
-    .select("id, name, hsn_code, gst_rate, purchase_price, opening_stock_qty, opening_stock_value")
+    .select("id, name, hsn_code, gst_rate, purchase_price, current_stock, opening_stock_qty, opening_stock_value")
     .eq("company_id", companyId)
     .order("name", { ascending: true });
 
@@ -34,27 +34,31 @@ export async function getInventoryAsOf(params: {
 
   const { data: invoices, error: invoicesError } = await supabase
     .from("invoices")
-    .select("id, invoice_type")
+    .select("id, invoice_type, invoice_date")
     .eq("company_id", companyId)
-    .in("invoice_type", ["sales", "purchase", "sale_return", "purchase_return"])
-    .lte("invoice_date", asOfDate);
+    .in("invoice_type", ["sales", "purchase", "sale_return", "purchase_return"]);
 
   if (invoicesError) {
     logger.error("Inventory as-of: failed to load invoices:", invoicesError);
     throw invoicesError;
   }
 
-  const invoiceIds = (invoices || []).map((i: any) => i.id);
+  const invoiceIdsUpTo = (invoices || [])
+    .filter((i: any) => String(i.invoice_date) <= asOfDate)
+    .map((i: any) => i.id);
   const invoiceTypeById = new Map<string, string>(
     (invoices || []).map((i: any) => [String(i.id), String(i.invoice_type)])
   );
+  const invoiceDateById = new Map<string, string>(
+    (invoices || []).map((i: any) => [String(i.id), String(i.invoice_date)])
+  );
 
   let items: any[] = [];
-  if (invoiceIds.length > 0) {
+  if (invoiceIdsUpTo.length > 0) {
     const { data: itemsData, error: itemsError } = await supabase
       .from("invoice_items")
       .select("invoice_id, product_id, quantity")
-      .in("invoice_id", invoiceIds);
+      .in("invoice_id", invoiceIdsUpTo);
 
     if (itemsError) {
       logger.error("Inventory as-of: failed to load invoice items:", itemsError);
@@ -64,28 +68,37 @@ export async function getInventoryAsOf(params: {
   }
 
   const movementQty = new Map<string, number>();
+  const movementAfterQty = new Map<string, number>();
+
   for (const item of items) {
     const productId = item.product_id ? String(item.product_id) : null;
     if (!productId) continue;
 
     const qty = Number(item.quantity) || 0;
-    const invoiceType = invoiceTypeById.get(String(item.invoice_id)) || "";
+    const invoiceId = String(item.invoice_id);
+    const invoiceType = invoiceTypeById.get(invoiceId) || "";
+    const invoiceDate = invoiceDateById.get(invoiceId) || "";
 
-    // Purchases increase qty; sales decrease qty; returns reverse that
     let signedQty = 0;
     if (invoiceType === "purchase") signedQty = qty;
     else if (invoiceType === "purchase_return") signedQty = -qty;
     else if (invoiceType === "sales") signedQty = -qty;
     else if (invoiceType === "sale_return") signedQty = qty;
 
-    if (signedQty !== 0) {
+    if (signedQty === 0) continue;
+
+    if (invoiceDate <= asOfDate) {
       movementQty.set(productId, (movementQty.get(productId) || 0) + signedQty);
+    }
+    if (invoiceDate > asOfDate) {
+      movementAfterQty.set(productId, (movementAfterQty.get(productId) || 0) + signedQty);
     }
   }
 
   return (products || []).map((p: any) => {
     const importedOpeningQty = Number(p.opening_stock_qty) || 0;
     const openingValue = Number(p.opening_stock_value) || 0;
+    const currentStock = Number(p.current_stock) || 0;
     const purchasePrice = Number(p.purchase_price) || 0;
 
     let unitCost = purchasePrice;
@@ -95,9 +108,15 @@ export async function getInventoryAsOf(params: {
     if (!unitCost || Number.isNaN(unitCost)) unitCost = 0;
 
     const movedQty = movementQty.get(String(p.id)) || 0;
-    const qtyAsOf = importedOpeningQty + movedQty;
+    const movedAfter = movementAfterQty.get(String(p.id)) || 0;
 
-    // Use imported opening value at period start when no movements have occurred yet
+    // Prefer current_stock minus future movements (handles products without opening_stock_qty)
+    let qtyAsOf = importedOpeningQty + movedQty;
+    if (importedOpeningQty === 0 && openingValue === 0 && currentStock > 0) {
+      qtyAsOf = currentStock - movedAfter;
+    }
+    qtyAsOf = Math.max(0, qtyAsOf);
+
     let stockValue = qtyAsOf * unitCost;
     if (movedQty === 0 && openingValue > 0) {
       stockValue = openingValue;

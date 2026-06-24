@@ -2,6 +2,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { XCircle, ArrowRight, RefreshCw, AlertTriangle, Mail, Receipt } from 'lucide-react';
+import { buildSupportMailtoUrl, SUPPORT_EMAIL } from '@/lib/supportEmail';
 
 export default function PaymentFailure() {
   const navigate = useNavigate();
@@ -110,11 +111,11 @@ export default function PaymentFailure() {
                   If you continue to experience issues or if money was deducted, 
                   please contact our support team immediately.
                 </p>
-                <a 
-                  href="mailto:retailmarketingpro1.0@gmail.com?subject=Payment%20Issue%20-%20Transaction%20ID%3A%20${txnid || 'N/A'}" 
+                <a
+                  href={buildSupportMailtoUrl('payment', { transactionId: txnid || undefined })}
                   className="text-sm text-primary hover:underline font-medium"
                 >
-                  retailmarketingpro1.0@gmail.com
+                  {SUPPORT_EMAIL}
                 </a>
               </div>
             </div>

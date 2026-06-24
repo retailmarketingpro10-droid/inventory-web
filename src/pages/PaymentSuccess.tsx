@@ -8,6 +8,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useSubscription } from '@/hooks/useSubscription';
 import { logger } from '@/lib/logger';
+import { buildSupportMailtoUrl, SUPPORT_EMAIL } from '@/lib/supportEmail';
 
 export default function PaymentSuccess() {
   const navigate = useNavigate();
@@ -230,12 +231,9 @@ export default function PaymentSuccess() {
           </Button>
 
           <p className="text-center text-xs text-muted-foreground">
-            Need help? Contact us at{' '}
-            <a
-              href="mailto:retailmarketingpro1.0@gmail.com"
-              className="text-primary hover:underline"
-            >
-              retailmarketingpro1.0@gmail.com
+            Need help?{' '}
+            <a href={buildSupportMailtoUrl('billing')} className="text-primary hover:underline">
+              {SUPPORT_EMAIL}
             </a>
           </p>
         </CardContent>

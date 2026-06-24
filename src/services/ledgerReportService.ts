@@ -266,15 +266,20 @@ export async function generateTrialBalanceFromLedger(params: LedgerReportParams)
 
   const totalDebits = rows.reduce((s, r) => s + (Number(r.closing_debit) || 0), 0);
   const totalCredits = rows.reduce((s, r) => s + (Number(r.closing_credit) || 0), 0);
+  const periodDebits = rows.reduce((s, r) => s + (Number(r.debits) || 0), 0);
+  const periodCredits = rows.reduce((s, r) => s + (Number(r.credits) || 0), 0);
 
   return {
     rows,
     summary: {
       totalSales: totalCredits,
       totalPurchases: totalDebits,
-      grossProfit: rows.reduce((s, r) => s + r.debits, 0),
+      grossProfit: periodDebits - periodCredits,
       netProfit: totalDebits - totalCredits,
-      periodCredits: rows.reduce((s, r) => s + r.credits, 0),
+      periodDebits,
+      periodCredits,
+      totalClosingDebits: totalDebits,
+      totalClosingCredits: totalCredits,
     },
   };
 }
@@ -386,21 +391,30 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
     }
   }
 
+  // When there are no sales, purchases add to stock — closing must be opening + purchases.
+  const impliedClosingStock = openingStock + netPurchases + directExpenses;
+  if (netSales === 0 && impliedClosingStock > closingStock + 0.01) {
+    closingStock = impliedClosingStock;
+  }
+
   const cogs = openingStock + netPurchases + directExpenses - closingStock;
   const grossProfit = netSales - cogs;
   const netProfit = grossProfit - indirectExpenses + indirectIncome;
+
+  const grossProfitCategory = grossProfit >= 0 ? 'Gross Profit' : 'Gross Loss';
+  const netProfitCategory = netProfit >= 0 ? 'Net Profit' : 'Net Loss';
 
   const rows = [
     { subcategory: 'Sales Account', amount: netSales, category: 'Revenue' },
     { subcategory: 'Opening Stock', amount: openingStock, category: 'Cost of Goods Sold' },
     { subcategory: 'Purchase Account', amount: netPurchases, category: 'Cost of Goods Sold' },
     { subcategory: 'Direct Expenses', amount: directExpenses, category: 'Cost of Goods Sold' },
-    { subcategory: 'Less: Closing Stock', amount: -closingStock, category: 'Cost of Goods Sold' },
+    { subcategory: 'Less: Closing Stock', amount: closingStock, category: 'Cost of Goods Sold' },
     { subcategory: 'Cost of Goods Sold', amount: cogs, category: 'Cost of Goods Sold' },
-    { subcategory: '', amount: grossProfit, category: 'Gross Profit' },
+    { subcategory: '', amount: grossProfit, category: grossProfitCategory },
     { subcategory: 'Indirect Expenses', amount: indirectExpenses, category: 'Indirect Expenses' },
     { subcategory: 'Indirect Income', amount: indirectIncome, category: 'Indirect Income' },
-    { subcategory: '', amount: netProfit, category: 'Net Profit' },
+    { subcategory: '', amount: netProfit, category: netProfitCategory },
   ];
 
   return {
@@ -499,5 +513,49 @@ export async function generateBalanceSheetFromLedger(params: LedgerReportParams)
 
 export async function generateLedgerSummaryFromLedger(params: LedgerReportParams) {
   const result = await generateTrialBalanceFromLedger(params);
-  return result;
+
+  const assetTypes = new Set(['asset', 'cash', 'bank', 'receivables']);
+  const liabilityTypes = new Set([
+    'payables',
+    'liability',
+    'loan',
+    'sundry creditor',
+    'creditor',
+    'secondary loan',
+    'unsecured loan',
+  ]);
+  const equityTypes = new Set(['capital', 'equity']);
+  const incomeTypes = new Set(['income', 'revenue']);
+  const expenseTypes = new Set(['expense', 'expenses']);
+
+  let totalAssets = 0;
+  let totalLiabilities = 0;
+  let totalEquity = 0;
+  let totalIncome = 0;
+  let totalExpenses = 0;
+
+  result.rows.forEach((row: any) => {
+    const type = String(row.category || '').toLowerCase();
+    const bal = Number(row.closing_balance) || 0;
+
+    if (assetTypes.has(type)) totalAssets += Math.max(0, bal);
+    else if (liabilityTypes.has(type)) totalLiabilities += Math.max(0, bal);
+    else if (equityTypes.has(type)) totalEquity += Math.max(0, bal);
+    else if (incomeTypes.has(type)) totalIncome += Math.max(0, bal);
+    else if (expenseTypes.has(type)) totalExpenses += Math.max(0, bal);
+    else if (bal >= 0) totalAssets += bal;
+    else totalLiabilities += Math.abs(bal);
+  });
+
+  return {
+    rows: result.rows,
+    summary: {
+      ...result.summary,
+      totalAssets,
+      totalLiabilities,
+      totalEquity,
+      totalIncome,
+      totalExpenses,
+    },
+  };
 }

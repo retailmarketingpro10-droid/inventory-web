@@ -1594,6 +1594,59 @@ export const InvoiceManager = () => {
         .eq('id', invoiceId);
 
       if (error) throw error;
+
+      if (
+        invoice &&
+        selectedCompany?.company_name &&
+        newStatus === 'paid' &&
+        invoice.payment_status !== 'paid'
+      ) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user?.id) {
+            const { data: payments } = await (supabase as any)
+              .from('invoice_payments')
+              .select('amount')
+              .eq('invoice_id', invoiceId)
+              .eq('user_id', user.id);
+            const totalPaid = (payments || []).reduce(
+              (sum: number, p: { amount?: number }) => sum + (Number(p.amount) || 0),
+              0
+            );
+            const amountToPost = Math.max(0, (invoice.total_amount || 0) - totalPaid);
+            if (amountToPost > 0) {
+              let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
+              mapping = await ensureDefaultChartOfAccounts(
+                user.id,
+                selectedCompany.company_name,
+                mapping
+              );
+              await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
+              await postPaymentToLedger({
+                invoiceId: invoice.id,
+                invoiceNumber: invoice.invoice_number,
+                invoiceType: invoice.invoice_type,
+                paymentDate: new Date().toISOString().split('T')[0],
+                amount: amountToPost,
+                paymentMethod: 'cash',
+                companyId: selectedCompany.company_name,
+                userId: user.id,
+                mapping,
+                invoicePaymentStatus: newStatus,
+              });
+            }
+          }
+        } catch (ledgerError: any) {
+          logger.error('Ledger posting for payment status failed:', ledgerError);
+          toast({
+            title: 'Ledger not posted',
+            description:
+              ledgerError.message ||
+              'Status updated but cash/receipt voucher failed. Record payment or check ledger mapping.',
+            variant: 'destructive',
+          });
+        }
+      }
       
       toast({ 
         title: "Success", 
@@ -1610,6 +1663,7 @@ export const InvoiceManager = () => {
   };
 
   const updateInvoiceStatus = async (invoiceId: string, newStatus: string) => {
+    const invoice = invoices.find(inv => inv.id === invoiceId);
     try {
       const { error } = await supabase
         .from('invoices')
@@ -1617,6 +1671,52 @@ export const InvoiceManager = () => {
         .eq('id', invoiceId);
 
       if (error) throw error;
+
+      if (
+        invoice &&
+        selectedCompany?.company_name &&
+        newStatus === 'paid' &&
+        invoice.payment_status !== 'paid'
+      ) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user?.id) {
+            const { data: payments } = await (supabase as any)
+              .from('invoice_payments')
+              .select('amount')
+              .eq('invoice_id', invoiceId)
+              .eq('user_id', user.id);
+            const totalPaid = (payments || []).reduce(
+              (sum: number, p: { amount?: number }) => sum + (Number(p.amount) || 0),
+              0
+            );
+            const amountToPost = Math.max(0, (invoice.total_amount || 0) - totalPaid);
+            if (amountToPost > 0) {
+              let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
+              mapping = await ensureDefaultChartOfAccounts(
+                user.id,
+                selectedCompany.company_name,
+                mapping
+              );
+              await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
+              await postPaymentToLedger({
+                invoiceId: invoice.id,
+                invoiceNumber: invoice.invoice_number,
+                invoiceType: invoice.invoice_type,
+                paymentDate: new Date().toISOString().split('T')[0],
+                amount: amountToPost,
+                paymentMethod: 'cash',
+                companyId: selectedCompany.company_name,
+                userId: user.id,
+                mapping,
+                invoicePaymentStatus: newStatus,
+              });
+            }
+          }
+        } catch (ledgerError: any) {
+          logger.error('Ledger posting for invoice status failed:', ledgerError);
+        }
+      }
 
       // Update corresponding GST entry
       const gstResult = await GSTSyncService.updateGSTEntryFromInvoice(
