@@ -13,7 +13,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { useCompany } from '@/contexts/CompanyContext';
-import { BookOpen, Package, Save, Wand2 } from 'lucide-react';
+import { BookOpen, Package, RotateCcw, Save, Wand2 } from 'lucide-react';
 import {
   DEFAULT_LEDGER_MAPPING,
   LEDGER_ROLE_LABELS,
@@ -30,8 +30,19 @@ import {
   fetchCompanyLedgers,
   type CompanyLedger,
 } from '@/services/chartOfAccountsService';
-import { reconcileStockInHandLedger } from '@/services/stockLedgerSyncService';
+import { reconcileStockInHandLedger, resetAndSyncStockInHandLedger } from '@/services/stockLedgerSyncService';
 import { getTotalStockValue } from '@/services/inventoryValuationService';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 const PRIMARY_ROLES: LedgerRole[] = [
   'sales',
@@ -59,6 +70,7 @@ export function InvoiceAccountingSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncingStock, setSyncingStock] = useState(false);
+  const [resettingStock, setResettingStock] = useState(false);
   const [stockValue, setStockValue] = useState<number | null>(null);
   const [ledgers, setLedgers] = useState<CompanyLedger[]>([]);
   const [mapping, setMapping] = useState<LedgerMappingSettings>({
@@ -153,6 +165,38 @@ export function InvoiceAccountingSettings() {
     }
   };
 
+  const handleResetStock = async () => {
+    if (!user?.id || !selectedCompany?.company_name) return;
+    setResettingStock(true);
+    try {
+      const result = await resetAndSyncStockInHandLedger({
+        companyId: selectedCompany.company_name,
+        userId: user.id,
+        mapping,
+      });
+      const total = await getTotalStockValue(selectedCompany.company_name);
+      setStockValue(total);
+      setLedgers(await fetchCompanyLedgers(user.id, selectedCompany.company_name));
+      toast({
+        title: 'Stock ledger reset',
+        description:
+          result.removedCount > 0
+            ? `Removed ${result.removedCount} old stock journal(s). Stock-in-Hand is now ₹${total.toFixed(2)}${result.adjusted ? ` (posted fresh sync)` : ''}.`
+            : result.adjusted
+              ? `No old journals found. Posted fresh sync to ₹${total.toFixed(2)}.`
+              : `Stock-in-Hand already matches inventory (₹${total.toFixed(2)}).`,
+      });
+    } catch (error: any) {
+      toast({
+        title: 'Reset failed',
+        description: error.message || 'Could not reset Stock-in-Hand ledger',
+        variant: 'destructive',
+      });
+    } finally {
+      setResettingStock(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!user?.id || !selectedCompany?.company_name) return;
     setSaving(true);
@@ -213,11 +257,56 @@ export function InvoiceAccountingSettings() {
               type="button"
               variant="outline"
               onClick={handleSyncStock}
-              disabled={saving || syncingStock}
+              disabled={saving || syncingStock || resettingStock}
             >
               <Package className="h-4 w-4 mr-2" />
               {syncingStock ? 'Syncing…' : 'Sync Stock to Ledger'}
             </Button>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-destructive/50 text-destructive hover:bg-destructive/10"
+                  disabled={saving || syncingStock || resettingStock}
+                >
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  {resettingStock ? 'Resetting…' : 'Reset Stock Ledger'}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Reset Stock-in-Hand ledger?</AlertDialogTitle>
+                  <AlertDialogDescription className="space-y-2">
+                    <span className="block">
+                      This deletes all <strong>stock journal</strong> entries for{' '}
+                      <strong>{selectedCompany.company_name}</strong> (Stock-in-Hand and matching
+                      Capital postings), then posts one fresh entry to match current inventory
+                      {stockValue !== null ? (
+                        <>
+                          {' '}
+                          (₹{stockValue.toFixed(2)})
+                        </>
+                      ) : null}
+                      .
+                    </span>
+                    <span className="block text-muted-foreground">
+                      Invoice, sales, and payment vouchers are not affected. Use this if Stock-in-Hand
+                      or Capital shows wrong amounts (e.g. ₹1,800 instead of actual stock value).
+                    </span>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleResetStock}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Reset &amp; sync
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <Button type="button" onClick={handleSave} disabled={saving}>
               <Save className="h-4 w-4 mr-2" />
               Save Mapping
@@ -255,7 +344,8 @@ export function InvoiceAccountingSettings() {
                 Current valued inventory:{' '}
                 <span className="font-semibold">₹{stockValue.toFixed(2)}</span>
                 {' — '}
-                use <strong>Sync Stock to Ledger</strong> if Stock-in-Hand shows ₹0.
+                use <strong>Sync Stock to Ledger</strong> for small adjustments, or{' '}
+                <strong>Reset Stock Ledger</strong> if amounts look wrong (duplicates / negatives).
               </div>
             )}
 

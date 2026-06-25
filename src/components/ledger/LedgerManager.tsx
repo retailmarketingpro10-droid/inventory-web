@@ -28,6 +28,7 @@ import {
   Trash2
 } from "lucide-react";
 import { formatIndianCurrency, getCurrentFinancialYear } from "@/utils/indianBusiness";
+import { getSignedLedgerBalance } from "@/services/ledgerBalanceService";
 import { StatCard } from "@/components/inventory/StatCard";
 import { DateInput } from "@/components/ui/date-input";
 import { 
@@ -217,9 +218,21 @@ export const LedgerManager = () => {
           .from('ledger_entries')
           .select('*', { count: 'exact', head: true })
           .eq('ledger_id', ledger.id);
+
+        let signedBalance = Number(ledger.current_balance) || 0;
+        try {
+          signedBalance = await getSignedLedgerBalance({
+            ledgerId: ledger.id,
+            userId: userData.user.id,
+            ledgerType: ledger.ledger_type,
+          });
+        } catch {
+          // keep stored balance if recompute fails
+        }
         
         return {
           ...ledger,
+          current_balance: signedBalance,
           entries_count: count || 0
         };
       }));

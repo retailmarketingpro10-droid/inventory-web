@@ -47,7 +47,7 @@ import {
   generateTrialBalanceFromLedger,
 } from '@/services/ledgerReportService';
 import { generatePaymentReport, paymentMethodLabel } from '@/services/paymentReportService';
-import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
+import { GstrReturnReport } from '@/components/reports/GstrReturnReport';
 import { GSTSyncService } from '@/services/gstSyncService';
 import { getCurrentFinancialYear } from '@/utils/indianBusiness';
 import { getInventoryAsOf } from '@/services/inventoryValuationService';
@@ -136,7 +136,7 @@ const REPORT_TYPES = [
   { id: 'trial-balance', name: 'Trial Balance', icon: <FileText className="h-4 w-4" /> },
   { id: 'sales-report', name: 'Sales Report', icon: <BarChart3 className="h-4 w-4" /> },
   { id: 'purchase-report', name: 'Purchase Report', icon: <FileText className="h-4 w-4" /> },
-  { id: 'gst-report', name: 'GST Report', icon: <FileText className="h-4 w-4" /> },
+  { id: 'gst-report', name: 'GST Returns (GSTR-1/2A/2B/3B)', icon: <FileText className="h-4 w-4" /> },
   { id: 'payment-report', name: 'Payment Report', icon: <FileText className="h-4 w-4" /> },
   { id: 'ledger-summary', name: 'Ledger Summary', icon: <FileText className="h-4 w-4" /> },
   { id: 'invoice-aging', name: 'Invoice Aging Report', icon: <BarChart3 className="h-4 w-4" /> },
@@ -171,6 +171,7 @@ export const ReportsManager: React.FC = () => {
   });
   const [generatedTime, setGeneratedTime] = useState<string>('');
   const [gstSyncLoading, setGstSyncLoading] = useState(false);
+  const [gstRefreshKey, setGstRefreshKey] = useState(0);
   const [inventoryAsOfMode, setInventoryAsOfMode] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const { toast } = useToast();
@@ -187,6 +188,7 @@ export const ReportsManager: React.FC = () => {
         variant: errorCount > 0 ? "default" : "default"
       });
       if (selectedReport === 'gst-report') {
+        setGstRefreshKey((k) => k + 1);
         generateReport();
       }
     } catch (error: any) {
@@ -726,159 +728,14 @@ export const ReportsManager: React.FC = () => {
         }
 
         case 'gst-report': {
-          try {
-            const { data: { user } } = await supabase.auth.getUser();
-            
-            if (!user?.id) {
-              toast({
-                title: "Error",
-                description: "User not authenticated",
-                variant: "destructive"
-              });
-              throw new Error('User not authenticated');
-            }
-            
-            // Fetch all GST entries for the company (all invoice types: sale/purchase/return/refund)
-            let gstData: any[] = [];
-            
-            const { data, error } = await (supabase as any).from('gst_entries')
-              .select(`
-                transaction_type,
-                invoice_number,
-                invoice_date,
-                taxable_amount,
-                gst_rate,
-                cgst,
-                sgst,
-                igst,
-                total_gst,
-                invoices!inner(
-                  company_id,
-                  invoice_type
-                )
-              `)
-              .eq('invoices.company_id', selectedCompany.company_name)
-              .eq('user_id', user.id)
-              .gte('invoice_date', dateFrom)
-              .lte('invoice_date', dateTo)
-              .order('invoice_date', { ascending: false });
-            
-            if (error) {
-              logger.error('Error fetching GST data:', error);
-              throw error;
-            } else {
-              gstData = data || [];
-              console.log(`Found ${gstData.length} GST entries for company ${selectedCompany.company_name}`);
-            }
-
-          // Include sale + sale_return for output tax (sale_return has negative amounts, so net = Sales GST - Return GST)
-          const salesTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'sale' || g.transaction_type === 'sale_return');
-          const purchaseTransactions = (gstData || []).filter((g: any) => g.transaction_type === 'purchase' || g.transaction_type === 'purchase_return');
-
-          // Output Tax = Sales GST − Sale Return GST (sale_return entries have negative cgst/sgst/igst)
-          const outputCGST = salesTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
-          const outputSGST = salesTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
-          const outputIGST = salesTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
-          const totalOutputTax = outputCGST + outputSGST + outputIGST;
-
-          // Input Tax = Purchase GST − Purchase Return GST (purchase_return entries have negative amounts)
-          const inputCGST = purchaseTransactions.reduce((sum, g) => sum + (g.cgst || 0), 0);
-          const inputSGST = purchaseTransactions.reduce((sum, g) => sum + (g.sgst || 0), 0);
-          const inputIGST = purchaseTransactions.reduce((sum, g) => sum + (g.igst || 0), 0);
-          const totalInputTax = inputCGST + inputSGST + inputIGST;
-
-          // Calculate Net GST Liability (Output Tax - Input Tax)
-          const netCGST = outputCGST - inputCGST;
-          const netSGST = outputSGST - inputSGST;
-          const netIGST = outputIGST - inputIGST;
-          const netGSTLiability = totalOutputTax - totalInputTax;
-
-          // Include sale, purchase, sale_return, and purchase_return for detailed view (returns show negative amounts)
-          const regularGSTData = (gstData || []).filter((g: any) => 
-            g.transaction_type === 'sale' || g.transaction_type === 'purchase' ||
-            g.transaction_type === 'sale_return' || g.transaction_type === 'purchase_return'
-          );
-          
-          // Create detailed GST breakdown rows (include return/refund entries with negative amounts)
-          const gstBreakdownRows: any[] = [];
-          regularGSTData.forEach((g: any) => {
-            // Add CGST row if CGST is non-zero (positive = sale/purchase, negative = return/refund deduction)
-            if (g.cgst != null && g.cgst !== 0) {
-              gstBreakdownRows.push({
-                subcategory: g.invoice_number || '',
-                amount: g.cgst || 0,
-                category: 'CGST',
-                invoice_number: g.invoice_number,
-                invoice_date: g.invoice_date,
-                transaction_type: g.transaction_type,
-                taxable_amount: g.taxable_amount || 0,
-                gst_type: 'CGST',
-                gst_rate: g.gst_rate || 0
-              });
-            }
-            // Add SGST row if SGST is non-zero
-            if (g.sgst != null && g.sgst !== 0) {
-              gstBreakdownRows.push({
-                subcategory: g.invoice_number || '',
-                amount: g.sgst || 0,
-                category: 'SGST',
-                invoice_number: g.invoice_number,
-                invoice_date: g.invoice_date,
-                transaction_type: g.transaction_type,
-                taxable_amount: g.taxable_amount || 0,
-                gst_type: 'SGST',
-                gst_rate: g.gst_rate || 0
-              });
-            }
-            // Add IGST row if IGST is non-zero
-            if (g.igst != null && g.igst !== 0) {
-              gstBreakdownRows.push({
-                subcategory: g.invoice_number || '',
-                amount: g.igst || 0,
-                category: 'IGST',
-                invoice_number: g.invoice_number,
-                invoice_date: g.invoice_date,
-                transaction_type: g.transaction_type,
-                taxable_amount: g.taxable_amount || 0,
-                gst_type: 'IGST',
-                gst_rate: g.gst_rate || 0
-              });
-            }
-          });
-          
-          sampleData = gstBreakdownRows;
-
-            newSummary = {
-              totalSales: outputCGST, // Output CGST
-              totalPurchases: outputSGST, // Output SGST
-              grossProfit: outputIGST, // Output IGST
-              netProfit: netGSTLiability, // Net GST Liability
-              // Store additional breakdown for summary display
-              inputCGST,
-              inputSGST,
-              inputIGST,
-              outputCGST,
-              outputSGST,
-              outputIGST,
-              netCGST,
-              netSGST,
-              netIGST
-            };
-          } catch (error: any) {
-            logger.error('GST report error:', error);
-            toast({
-              title: "Error",
-              description: error?.message || "Failed to generate GST report",
-              variant: "destructive"
-            });
-            sampleData = [];
-            newSummary = {
-              totalSales: 0,
-              totalPurchases: 0,
-              grossProfit: 0,
-              netProfit: 0
-            };
-          }
+          setGstRefreshKey((k) => k + 1);
+          sampleData = [];
+          newSummary = {
+            totalSales: 0,
+            totalPurchases: 0,
+            grossProfit: 0,
+            netProfit: 0,
+          };
           break;
         }
         
@@ -1696,7 +1553,7 @@ export const ReportsManager: React.FC = () => {
       </Card>
 
       {/* Report Display */}
-      {reportData.length > 0 && (
+      {(reportData.length > 0 || selectedReport === 'gst-report') && selectedCompany && (
         <div className="space-y-4">
           {/* Report Title */}
           <Card>
@@ -1709,7 +1566,7 @@ export const ReportsManager: React.FC = () => {
                     {selectedReport === 'trial-balance' && 'Trial Balance'}
                     {selectedReport === 'sales-report' && 'Sales Report'}
                     {selectedReport === 'purchase-report' && 'Purchase Report'}
-                    {selectedReport === 'gst-report' && 'GST Report'}
+                    {selectedReport === 'gst-report' && 'GST Returns — GSTR-1 / 2A / 2B / 3B'}
                     {selectedReport === 'payment-report' && 'Payment Report'}
                     {selectedReport === 'ledger-summary' && 'Ledger Summary'}
                     {selectedReport === 'invoice-aging' && 'Invoice Aging Report'}
@@ -1751,6 +1608,18 @@ export const ReportsManager: React.FC = () => {
           </Card>
 
           {/* Report Table */}
+          {selectedReport === 'gst-report' ? (
+            <Card>
+              <CardContent className="p-4">
+                <GstrReturnReport
+                  companyName={selectedCompany.company_name}
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  refreshKey={gstRefreshKey}
+                />
+              </CardContent>
+            </Card>
+          ) : (
           <Card>
             <CardContent className="p-0">
               <Table>
@@ -2166,8 +2035,10 @@ export const ReportsManager: React.FC = () => {
               </Table>
             </CardContent>
           </Card>
+          )}
 
           {/* Summary Section */}
+          {selectedReport !== 'gst-report' && (
           <Card>
             <CardHeader>
               <CardTitle>Summary</CardTitle>
@@ -2601,11 +2472,12 @@ export const ReportsManager: React.FC = () => {
               </div>
             </CardContent>
           </Card>
+          )}
 
         </div>
       )}
 
-      {loading && (
+      {loading && selectedReport !== 'gst-report' && (
         <Card>
           <CardContent className="p-8 text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>

@@ -3,6 +3,7 @@ import { logger } from '@/lib/logger';
 import type { LedgerMappingSettings } from '@/config/ledgerAccounts';
 import { createLedgerTransaction } from '@/services/ledgerPostingService';
 import { getTotalStockValue } from '@/services/inventoryValuationService';
+import { getSignedLedgerBalance } from '@/services/ledgerBalanceService';
 import { getFinancialYearForDate } from '@/utils/indianBusiness';
 
 function round2(n: number) {
@@ -43,9 +44,9 @@ export async function reconcileStockInHandLedger(
   const asOfDate = params.asOfDate || new Date().toISOString().split('T')[0];
   const targetValue = await getTotalStockValue(params.companyId, asOfDate);
 
-  const { data: ledger, error: ledgerError } = await (supabase as any)
+  const { data: stockLedger, error: ledgerError } = await (supabase as any)
     .from('ledgers')
-    .select('current_balance')
+    .select('current_balance, ledger_type')
     .eq('id', stockId)
     .eq('user_id', params.userId)
     .single();
@@ -55,11 +56,28 @@ export async function reconcileStockInHandLedger(
     throw ledgerError;
   }
 
-  const currentBalance = Number(ledger?.current_balance) || 0;
+  const currentBalance = await getSignedLedgerBalance({
+    ledgerId: stockId,
+    userId: params.userId,
+    ledgerType: stockLedger?.ledger_type || 'asset',
+  });
   const diff = round2(targetValue - currentBalance);
 
   if (Math.abs(diff) < 0.01) {
     return { adjusted: false, difference: 0 };
+  }
+
+  // Avoid duplicate stock journals for the same invoice
+  if (params.invoiceId) {
+    const { data: existing } = await (supabase as any)
+      .from('ledger_transactions')
+      .select('id')
+      .eq('invoice_id', params.invoiceId)
+      .eq('voucher_type', 'stock_journal')
+      .limit(1);
+    if ((existing?.length || 0) > 0) {
+      return { adjusted: false, difference: diff };
+    }
   }
 
   const fy = getFinancialYearForDate(new Date(asOfDate)).label;
@@ -88,4 +106,66 @@ export async function reconcileStockInHandLedger(
   });
 
   return { adjusted: true, difference: diff, transactionId };
+}
+
+/**
+ * Removes all stock-journal vouchers for the company, then posts one fresh sync
+ * to match current inventory value (fixes duplicated or inverted stock entries).
+ */
+export async function resetAndSyncStockInHandLedger(params: {
+  companyId: string;
+  userId: string;
+  mapping: LedgerMappingSettings;
+}): Promise<{
+  removedCount: number;
+  adjusted: boolean;
+  difference?: number;
+  targetValue: number;
+}> {
+  const { data: txs, error: fetchError } = await (supabase as any)
+    .from('ledger_transactions')
+    .select('id, voucher_type, description')
+    .eq('company_id', params.companyId)
+    .eq('user_id', params.userId);
+
+  if (fetchError) {
+    logger.error('resetAndSyncStockInHandLedger: fetch', fetchError);
+    throw fetchError;
+  }
+
+  const stockTxIds = (txs || [])
+    .filter(
+      (t: { voucher_type?: string; description?: string }) =>
+        t.voucher_type === 'stock_journal' ||
+        /stock-in-hand sync/i.test(t.description || '')
+    )
+    .map((t: { id: string }) => t.id);
+
+  if (stockTxIds.length > 0) {
+    const { error: deleteError } = await (supabase as any)
+      .from('ledger_transactions')
+      .delete()
+      .in('id', stockTxIds)
+      .eq('user_id', params.userId);
+
+    if (deleteError) {
+      logger.error('resetAndSyncStockInHandLedger: delete', deleteError);
+      throw deleteError;
+    }
+  }
+
+  const targetValue = await getTotalStockValue(params.companyId);
+  const result = await reconcileStockInHandLedger({
+    companyId: params.companyId,
+    userId: params.userId,
+    mapping: params.mapping,
+    reference: 'Stock ledger reset sync',
+  });
+
+  return {
+    removedCount: stockTxIds.length,
+    adjusted: result.adjusted,
+    difference: result.difference,
+    targetValue,
+  };
 }

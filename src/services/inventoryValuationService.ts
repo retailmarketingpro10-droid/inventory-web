@@ -163,8 +163,36 @@ export async function getTotalStockValue(
   companyId: string,
   asOfDate?: string
 ): Promise<number> {
-  const date =
-    asOfDate || new Date().toISOString().split('T')[0];
+  const date = asOfDate || new Date().toISOString().split('T')[0];
+
+  const { data: products, error } = await supabase
+    .from('products')
+    .select('current_stock, purchase_price, opening_stock_qty, opening_stock_value')
+    .eq('company_id', companyId);
+
+  if (error) {
+    logger.error('getTotalStockValue: products', error);
+    throw error;
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  let fromCurrentStock = 0;
+  for (const p of products || []) {
+    const qty = Math.max(0, Number(p.current_stock) || 0);
+    const price = Number(p.purchase_price) || 0;
+    const openingQty = Number(p.opening_stock_qty) || 0;
+    const openingValue = Number(p.opening_stock_value) || 0;
+    let unitCost = price;
+    if (!unitCost && openingQty > 0 && openingValue > 0) {
+      unitCost = openingValue / openingQty;
+    }
+    fromCurrentStock += qty * unitCost;
+  }
+
+  if (date >= today && fromCurrentStock > 0) {
+    return round2(fromCurrentStock);
+  }
+
   const rows = await getInventoryAsOf({ companyId, asOfDate: date });
   return round2(rows.reduce((sum, row) => sum + Math.max(0, row.stock_value), 0));
 }
