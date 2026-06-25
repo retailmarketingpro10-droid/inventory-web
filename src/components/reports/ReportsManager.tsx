@@ -48,6 +48,7 @@ import {
 } from '@/services/ledgerReportService';
 import { generatePaymentReport, paymentMethodLabel } from '@/services/paymentReportService';
 import { GstrReturnReport } from '@/components/reports/GstrReturnReport';
+import { ReportChatWidget } from '@/components/reports/ReportChatWidget';
 import { GSTSyncService } from '@/services/gstSyncService';
 import { getCurrentFinancialYear } from '@/utils/indianBusiness';
 import { getInventoryAsOf } from '@/services/inventoryValuationService';
