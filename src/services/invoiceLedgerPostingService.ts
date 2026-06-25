@@ -342,13 +342,13 @@ async function updatePartyEntryStatusForInvoice(
 
   if (!invoiceTxIds.length) return;
 
+  // Party line may be debit (debtors) or credit (creditors) depending on invoice type
   await (supabase as any)
     .from('ledger_entries')
     .update({ status: entryStatus })
     .in('transaction_id', invoiceTxIds)
     .in('ledger_id', partyLedgerIds)
-    .eq('user_id', userId)
-    .gt('debit_amount', 0);
+    .eq('user_id', userId);
 }
 
 export async function postPaymentToLedger(

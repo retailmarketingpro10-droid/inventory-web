@@ -28,7 +28,7 @@ import {
   Trash2
 } from "lucide-react";
 import { formatIndianCurrency, getCurrentFinancialYear } from "@/utils/indianBusiness";
-import { getSignedLedgerBalance } from "@/services/ledgerBalanceService";
+import { getSignedLedgerBalance, isCreditNormalLedgerType } from "@/services/ledgerBalanceService";
 import { StatCard } from "@/components/inventory/StatCard";
 import { DateInput } from "@/components/ui/date-input";
 import { 
@@ -76,6 +76,45 @@ interface LedgerStats {
   paidEntries: number;
   dueEntries: number;
   partialEntries: number;
+}
+
+function computeEntryRunningBalances(
+  entries: LedgerEntry[],
+  openingBalance: number,
+  ledgerType: string
+): LedgerEntry[] {
+  const creditNormal = isCreditNormalLedgerType(ledgerType);
+  const sorted = [...entries].sort((a, b) => {
+    const byDate = String(a.entry_date).localeCompare(String(b.entry_date));
+    if (byDate !== 0) return byDate;
+    return String(a.created_at).localeCompare(String(b.created_at));
+  });
+
+  const balanceById = new Map<string, number>();
+  let running = Number(openingBalance) || 0;
+  for (const entry of sorted) {
+    const debit = Number(entry.debit_amount) || 0;
+    const credit = Number(entry.credit_amount) || 0;
+    running += creditNormal ? credit - debit : debit - credit;
+    balanceById.set(entry.id, running);
+  }
+
+  return entries.map((entry) => ({
+    ...entry,
+    balance: balanceById.get(entry.id) ?? entry.balance,
+  }));
+}
+
+function isPartyLedgerType(ledgerType: string): boolean {
+  const t = (ledgerType || '').toLowerCase();
+  return t === 'receivables' || t === 'payables';
+}
+
+function displayEntryStatus(status: string, ledgerType: string): string {
+  if (!isPartyLedgerType(ledgerType) && status === 'paid') {
+    return 'posted';
+  }
+  return status;
 }
 
 export const LedgerManager = () => {
@@ -274,8 +313,15 @@ export const LedgerManager = () => {
         logger.error('Error fetching ledger entries:', error);
         throw error;
       }
-      
-      setLedgerEntries(data || []);
+
+      const ledger = ledgers.find((l) => l.id === selectedLedger);
+      const withBalances = computeEntryRunningBalances(
+        (data || []) as LedgerEntry[],
+        ledger?.opening_balance ?? 0,
+        ledger?.ledger_type ?? 'asset'
+      );
+
+      setLedgerEntries(withBalances);
     } catch (error: any) {
       logger.error('Failed to load ledger entries:', error);
       toast({
@@ -285,7 +331,7 @@ export const LedgerManager = () => {
       });
       setLedgerEntries([]);
     }
-  }, [selectedLedger, selectedFinancialYear, toast]);
+  }, [selectedLedger, selectedFinancialYear, ledgers, toast]);
 
   // Effects
   useEffect(() => {
@@ -591,6 +637,7 @@ export const LedgerManager = () => {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'paid': return <CheckCircle className="h-4 w-4 text-success" />;
+      case 'posted': return <CheckCircle className="h-4 w-4 text-muted-foreground" />;
       case 'partial': return <Clock className="h-4 w-4 text-warning" />;
       case 'due': return <AlertCircle className="h-4 w-4 text-destructive" />;
       default: return <Clock className="h-4 w-4 text-muted-foreground" />;
@@ -600,11 +647,14 @@ export const LedgerManager = () => {
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'paid': return 'default';
+      case 'posted': return 'outline';
       case 'partial': return 'secondary';
       case 'due': return 'destructive';
       default: return 'outline';
     }
   };
+
+  const selectedLedgerMeta = ledgers.find((l) => l.id === selectedLedger);
 
   if (!selectedCompany) {
     return (
@@ -1002,7 +1052,15 @@ export const LedgerManager = () => {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {ledgerEntries.map((entry) => (
+                        {ledgerEntries.map((entry) => {
+                          const entryStatus = displayEntryStatus(
+                            entry.status,
+                            selectedLedgerMeta?.ledger_type || ''
+                          );
+                          const partyLedger = isPartyLedgerType(
+                            selectedLedgerMeta?.ledger_type || ''
+                          );
+                          return (
                           <TableRow key={entry.id}>
                             <TableCell>
                               {new Date(entry.entry_date).toLocaleDateString('en-IN')}
@@ -1040,21 +1098,22 @@ export const LedgerManager = () => {
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
-                                {getStatusIcon(entry.status)}
+                                {getStatusIcon(entryStatus)}
                                 <Badge 
-                                  variant={getStatusColor(entry.status)}
+                                  variant={getStatusColor(entryStatus)}
                                   className={
-                                    entry.status === 'due' 
+                                    entryStatus === 'due' 
                                       ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' 
                                       : ''
                                   }
                                 >
-                                  {entry.status.toUpperCase()}
+                                  {entryStatus.toUpperCase()}
                                 </Badge>
                               </div>
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
+                                {partyLedger ? (
                                 <Select 
                                   value={entry.status}
                                   onValueChange={(value) => updateEntryStatus(entry.id, value)}
@@ -1068,6 +1127,9 @@ export const LedgerManager = () => {
                                     <SelectItem value="paid">Paid</SelectItem>
                                   </SelectContent>
                                 </Select>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -1079,7 +1141,8 @@ export const LedgerManager = () => {
                               </div>
                             </TableCell>
                           </TableRow>
-                        ))}
+                        );
+                        })}
                       </TableBody>
                     </Table>
                   </div>
