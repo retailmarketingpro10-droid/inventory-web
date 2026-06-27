@@ -26,6 +26,7 @@ import {
   postPaymentToLedger,
 } from "@/services/invoiceLedgerPostingService";
 import { reconcileStockInHandLedger } from "@/services/stockLedgerSyncService";
+import { resolvePurchaseOrderIdForInvoice } from "@/services/inventoryPurchaseService";
 import {
   fetchEligibleOriginalInvoices,
   fetchOriginalInvoiceSummary,
@@ -856,6 +857,18 @@ export const InvoiceManager = () => {
         return;
       }
 
+      // Resolve PO link for reference only — inventory updates on purchase invoice, not PO
+      const linkedPurchaseOrderId =
+        formData.invoice_type === 'purchase'
+          ? await resolvePurchaseOrderIdForInvoice({
+              companyId: selectedCompany.company_name,
+              invoiceType: formData.invoice_type,
+              totalAmount: totals.total,
+              lineItems: validLineItems,
+              explicitPoId: selectedPO || null,
+            })
+          : null;
+
       // Create invoice
       let invoice: any;
       const { data: invoiceData, error: invoiceError } = await supabase
@@ -875,6 +888,7 @@ export const InvoiceManager = () => {
           notes: formData.notes || null,
           user_id: user.id,
           company_id: selectedCompany.company_name,
+          purchase_order_id: linkedPurchaseOrderId,
           original_invoice_id: isReturnInvoiceType(formData.invoice_type)
             ? selectedOriginalInvoice
             : null,
@@ -907,6 +921,7 @@ export const InvoiceManager = () => {
                 notes: formData.notes || null,
                 user_id: user.id,
                 company_id: selectedCompany.company_name,
+                purchase_order_id: linkedPurchaseOrderId,
                 original_invoice_id: isReturnInvoiceType(formData.invoice_type)
                   ? selectedOriginalInvoice
                   : null,
@@ -1018,17 +1033,13 @@ export const InvoiceManager = () => {
       let inventoryUpdatesSuccess = 0;
       let inventoryUpdatesFailed = 0;
       
-      // Update inventory for customer invoices (sales/sale_return) or supplier invoices (purchase/purchase_return)
+      // Update inventory for customer invoices (sales/sale_return) or supplier/wholesaler purchases
       const shouldUpdateInventory = 
         (formData.entity_type === 'customer' && (formData.invoice_type === 'sales' || formData.invoice_type === 'sale_return')) ||
-        (formData.entity_type === 'supplier' && (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return'));
+        ((formData.entity_type === 'supplier' || formData.entity_type === 'wholesaler') &&
+          (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return'));
 
-      // PO-linked supplier invoices are accounting only — stock moves on PO receive
-      const skipInventoryForLinkedPo =
-        Boolean(selectedPO) &&
-        (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return');
-      
-      if (shouldUpdateInventory && !skipInventoryForLinkedPo) {
+      if (shouldUpdateInventory) {
         for (const item of validLineItems) {
           try {
             let productId: string | undefined = item.product_id;
@@ -1140,12 +1151,6 @@ export const InvoiceManager = () => {
             description: `Successfully updated inventory for ${inventoryUpdatesSuccess} item(s)${inventoryUpdatesFailed > 0 ? `. ${inventoryUpdatesFailed} failed.` : '.'}`,
           });
         }
-      } else if (skipInventoryForLinkedPo) {
-        toast({
-          title: "Invoice saved",
-          description:
-            "Inventory was not changed from this invoice. Use Purchase Orders → Update Receipt to add stock.",
-        });
       } else {
         // For non-inventory invoices (transport, wholesale, labour, other), skip inventory updates
       }

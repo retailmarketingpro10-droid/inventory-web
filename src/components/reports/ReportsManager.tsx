@@ -34,11 +34,9 @@ import { pdf } from '@react-pdf/renderer';
 import { downloadReportAsCSV } from '@/utils/pdfGenerator';
 import { logger } from '@/lib/logger';
 import {
-  fetchPurchaseOrdersForReport,
-  mapPurchaseOrdersToReportRows,
-  sumPurchaseOrderSubtotals,
-  sumPurchaseOrderTax,
-  sumPurchaseOrderTotals,
+  mapPurchaseInvoicesToReportRows,
+  mapPurchaseReturnsToReportRows,
+  buildPurchaseReportSummary,
 } from '@/lib/purchaseOrderReports';
 import {
   generateBalanceSheetFromLedger,
@@ -418,17 +416,10 @@ export const ReportsManager: React.FC = () => {
         }
 
         case 'purchase-report': {
-          const { data: { user: reportUser } } = await supabase.auth.getUser();
-          const purchaseOrders = await fetchPurchaseOrdersForReport({
-            companyName: selectedCompany.company_name,
-            dateFrom,
-            dateTo,
-            userId: reportUser?.id,
-          });
-
-          // Fetch purchase invoices
+          // Purchase Report = purchase invoices only (POs are order tracking, not purchases)
           const { data: purchaseInvoices, error: invoiceError } = await (supabase as any).from('invoices')
             .select(`
+              id,
               invoice_number,
               invoice_date,
               subtotal,
@@ -437,6 +428,8 @@ export const ReportsManager: React.FC = () => {
               invoice_type,
               entity_type,
               payment_status,
+              supplier_id,
+              purchase_order_id,
               suppliers(company_name),
               business_entities(name)
             `)
@@ -479,71 +472,19 @@ export const ReportsManager: React.FC = () => {
             logger.error('Error fetching purchase returns:', returnError);
           }
 
-          // Map purchase orders
-          const poRows = mapPurchaseOrdersToReportRows(purchaseOrders);
+          const purchaseInvoiceRows = mapPurchaseInvoicesToReportRows(purchaseInvoices || []);
+          const purchaseReturnRows = mapPurchaseReturnsToReportRows(purchaseReturns || []);
 
-          // Map purchase invoices
-          const purchaseInvoiceRows = (purchaseInvoices || []).map(inv => ({
-            subcategory: inv.invoice_number || '',
-            amount: inv.total_amount || 0,
-            category: new Date(inv.invoice_date).toLocaleDateString('en-IN'),
-            invoice_number: inv.invoice_number,
-            invoice_date: inv.invoice_date,
-            supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'Miscellaneous',
-            subtotal: inv.subtotal || 0,
-            tax_amount: inv.tax_amount || 0,
-            payment_status: inv.payment_status || 'due',
-            record_type: 'Purchase Invoice'
-          }));
+          sampleData = [...purchaseInvoiceRows, ...purchaseReturnRows];
 
-          // Map purchase return invoices
-          const purchaseReturnRows = (purchaseReturns || []).map(inv => ({
-            subcategory: inv.invoice_number || '',
-            amount: inv.total_amount || 0,
-            category: new Date(inv.invoice_date).toLocaleDateString('en-IN'),
-            invoice_number: inv.invoice_number,
-            invoice_date: inv.invoice_date,
-            supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'Miscellaneous',
-            subtotal: inv.subtotal || 0,
-            tax_amount: inv.tax_amount || 0,
-            payment_status: inv.payment_status || 'due',
-            record_type: 'Purchase Return'
-          }));
+          newSummary = buildPurchaseReportSummary({
+            purchaseInvoices: purchaseInvoices || [],
+            purchaseReturns: purchaseReturns || [],
+          });
 
-          // Include all: POs, purchases, and returns
-          sampleData = [...poRows, ...purchaseInvoiceRows, ...purchaseReturnRows];
-
-          // Calculate totals
-          const totalPO = sumPurchaseOrderSubtotals(purchaseOrders);
-          const totalPurchases = (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
-          const totalPurchaseReturns = (purchaseReturns || []).reduce((sum, inv) => sum + (inv.subtotal || 0), 0);
-          
-          const totalTax = sumPurchaseOrderTax(purchaseOrders) +
-                          (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.tax_amount || 0), 0);
-          const totalReturnTax = (purchaseReturns || []).reduce((sum, inv) => sum + (inv.tax_amount || 0), 0);
-          
-          const totalAmount = sumPurchaseOrderTotals(purchaseOrders) +
-                             (purchaseInvoices || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-          const totalReturnAmount = (purchaseReturns || []).reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-
-          // Net Purchase = Purchase - Purchase Return
-          const netPurchase = (totalPO + totalPurchases) - totalPurchaseReturns;
-          const netTax = totalTax - totalReturnTax;
-          const netAmount = totalAmount - totalReturnAmount;
-
-          newSummary = {
-            totalSales: 0,
-            totalPurchases: totalPO + totalPurchases,
-            grossProfit: netTax,
-            netProfit: netAmount,
-            purchaseReturns: totalPurchaseReturns,
-            netPurchase: netPurchase,
-            totalTax,
-            totalReturnTax,
-            netPurchaseTax: netTax
-          };
-          
-          console.log(`Purchase report: Purchases=${totalPO + totalPurchases}, Returns=${totalPurchaseReturns}, Net=${netPurchase}`);
+          console.log(
+            `Purchase report: Invoices=${(purchaseInvoices || []).length}, Returns=${(purchaseReturns || []).length}, Net=${newSummary.netPurchase}`
+          );
           break;
         }
 
@@ -1857,7 +1798,7 @@ export const ReportsManager: React.FC = () => {
                               row.record_type === 'Purchase Return' ? 'destructive' :
                               row.record_type === 'PO' ? 'secondary' : 'default'
                             }>
-                              {row.record_type || 'Purchase'}
+                              {row.record_type === 'PO' ? 'Open PO' : (row.record_type || 'Purchase')}
                             </Badge>
                           </TableCell>
                           <TableCell className="font-medium">{row.po_number || row.invoice_number || row.subcategory}</TableCell>
@@ -2315,6 +2256,7 @@ export const ReportsManager: React.FC = () => {
                       <p className="text-lg font-semibold text-blue-500">
                         {formatIndianCurrency(summary.totalPurchases)}
                       </p>
+                      <p className="text-xs text-muted-foreground">Purchase invoices only</p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Purchase Returns</p>

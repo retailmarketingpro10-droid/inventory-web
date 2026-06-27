@@ -50,7 +50,7 @@ function getReportSpecificGuidance(reportId: string): string {
     case "sales-report":
       return "For Sales Report: Net Sales = Total Sales − Sale Returns. Include both regular sales and sale returns in your analysis. Tax amounts reflect CGST/SGST or IGST.";
     case "purchase-report":
-      return "For Purchase Report: Net Purchases = Total Purchases − Purchase Returns. Base amounts exclude GST for COGS purposes.";
+      return "For Purchase Report: Net Purchases = Purchase Invoices − Purchase Returns. Purchase orders (PO) are not included — only purchase invoices count.";
     default:
       return "";
   }

@@ -800,23 +800,6 @@ export const PurchaseOrderManager = () => {
           .eq('id', item.id);
 
         if (itemError) throw itemError;
-
-        if (item.product_id && receiveQty > 0) {
-          const { data: product, error: productError } = await supabase
-            .from('products')
-            .select('current_stock')
-            .eq('id', item.product_id)
-            .single();
-
-          if (productError || !product) throw productError;
-
-          const { error: stockError } = await supabase
-            .from('products')
-            .update({ current_stock: product.current_stock + receiveQty })
-            .eq('id', item.product_id);
-
-          if (stockError) throw stockError;
-        }
       }
 
       const updatedItems = poItems.map((item) => ({
@@ -848,8 +831,8 @@ export const PurchaseOrderManager = () => {
       toast({
         title: "Success",
         description: allFullyReceived
-          ? "Purchase order fully received and inventory updated"
-          : "Partial receipt recorded and inventory updated",
+          ? "Purchase order fully received. Create a purchase invoice to update stock."
+          : "Partial receipt recorded. Create a purchase invoice to update stock.",
       });
 
       fetchPurchaseOrders();

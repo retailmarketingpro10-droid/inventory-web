@@ -33,6 +33,7 @@ interface PurchaseOrder {
   id: string;
   po_number: string;
   supplier_id: string;
+  company_id?: string | null;
   order_date: string;
   expected_delivery_date: string | null;
   status: string;
@@ -208,7 +209,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
     setSelectAll(false);
   };
 
-  const updateInventoryAndReceipt = async () => {
+  const updateReceipt = async () => {
     setSaving(true);
     
     try {
@@ -237,33 +238,6 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
         if (updateError) {
           logger.error('Error updating PO item:', updateError);
           throw new Error(`Failed to update item "${item.description}": ${updateError.message || 'Unknown error'}`);
-        }
-
-        // Update inventory if product exists
-        if (item.product_id) {
-          const receiveQty = receivingItems[item.id] || 0;
-          if (receiveQty <= 0) continue;
-
-          const { data: product, error: productError } = await supabase
-            .from('products')
-            .select('current_stock, name')
-            .eq('id', item.product_id)
-            .single();
-
-          if (productError || !product) {
-            logger.error('Error fetching product stock:', productError);
-            throw new Error(`Failed to fetch stock for "${item.description}"`);
-          }
-
-          const { error: inventoryError } = await supabase
-            .from('products')
-            .update({ current_stock: product.current_stock + receiveQty })
-            .eq('id', item.product_id);
-
-          if (inventoryError) {
-            logger.error('Error updating inventory:', inventoryError);
-            throw new Error(`Failed to update inventory for "${item.description}": ${inventoryError.message || 'Unknown error'}`);
-          }
         }
       }
 
@@ -298,14 +272,14 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
 
       toast({
         title: "Success",
-        description: `Updated inventory for ${itemsToUpdate.length} items and marked as ${allItemsReceived ? 'received' : 'partially received'}`
+        description: `Receipt recorded for ${itemsToUpdate.length} item(s). PO marked as ${allItemsReceived ? 'received' : 'partially received'}. Stock updates when you create a purchase invoice.`
       });
 
       onInventoryUpdated();
       onClose();
     } catch (error: any) {
-      logger.error('Error updating inventory and receipt:', error);
-      const errorMessage = error?.message || error?.details || 'Failed to update inventory and receipt';
+      logger.error('Error updating PO receipt:', error);
+      const errorMessage = error?.message || error?.details || 'Failed to update receipt';
       toast({
         title: "Error",
         description: errorMessage,
@@ -361,7 +335,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
             Receive Items - {po.po_number}
           </DialogTitle>
           <DialogDescription>
-            Confirm the quantities received and update inventory levels for this purchase order.
+            Confirm the quantities received for this purchase order. Inventory is updated when you create a purchase invoice.
           </DialogDescription>
         </DialogHeader>
 
@@ -600,11 +574,11 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
               Cancel
             </Button>
             <Button 
-              onClick={updateInventoryAndReceipt}
+              onClick={updateReceipt}
               disabled={selectedCount === 0 || saving}
             >
               <Save className="w-4 h-4 mr-2" />
-              {saving ? 'Updating...' : `Update Inventory (${selectedCount} items)`}
+              {saving ? 'Saving...' : `Confirm Receipt (${selectedCount} items)`}
             </Button>
           </div>
         </div>

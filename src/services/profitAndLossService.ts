@@ -1,9 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
 import { logger } from "@/lib/logger";
-import {
-  fetchPurchaseOrdersForReport,
-  sumPurchaseOrderSubtotals,
-} from "@/lib/purchaseOrderReports";
 
 export interface ProfitAndLossParams {
   companyName: string;
@@ -152,13 +148,6 @@ export async function generateProfitAndLossReport(
   const purchaseReturnsPeriodQtyMap = createQtyMap(purchaseReturnItems);
 
   const { data: userData } = await supabase.auth.getUser();
-  const reportUserId = userData?.user?.id;
-  const purchaseOrdersInPeriod = await fetchPurchaseOrdersForReport({
-    companyName,
-    dateFrom,
-    dateTo,
-    userId: reportUserId,
-  });
 
   // Fetch all products (including imported opening stock quantity used for first-period opening stock)
   const { data: products, error: productsError } = await (supabase as any).from("products")
@@ -205,8 +194,7 @@ export async function generateProfitAndLossReport(
 
   const totalPurchaseInvoices =
     purchaseInvoices?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
-  const totalPurchaseOrders = sumPurchaseOrderSubtotals(purchaseOrdersInPeriod);
-  const totalPurchases = totalPurchaseInvoices + totalPurchaseOrders;
+  const totalPurchases = totalPurchaseInvoices;
   const totalPurchaseReturns =
     purchaseReturns?.reduce((sum, inv) => sum + (inv.subtotal || 0), 0) || 0;
   const netPurchases = totalPurchases - totalPurchaseReturns;

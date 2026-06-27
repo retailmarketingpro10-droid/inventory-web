@@ -18,10 +18,25 @@ export interface PurchaseOrderReportRow {
   tax_amount?: number | null;
   total_amount?: number | null;
   status?: string | null;
+  supplier_id?: string | null;
   company_id?: string | null;
   user_id?: string | null;
   suppliers?: { company_name?: string | null } | null;
   purchase_order_items?: PurchaseOrderReportItem[] | null;
+}
+
+export interface PurchaseInvoiceReportRow {
+  id?: string;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  subtotal?: number | null;
+  tax_amount?: number | null;
+  total_amount?: number | null;
+  payment_status?: string | null;
+  supplier_id?: string | null;
+  purchase_order_id?: string | null;
+  suppliers?: { company_name?: string | null } | null;
+  business_entities?: { name?: string | null } | null;
 }
 
 export const PURCHASE_ORDER_REPORT_SELECT = `
@@ -32,6 +47,7 @@ export const PURCHASE_ORDER_REPORT_SELECT = `
   tax_amount,
   total_amount,
   status,
+  supplier_id,
   company_id,
   user_id,
   suppliers(company_name),
@@ -93,6 +109,137 @@ export function sumPurchaseOrderTotals(orders: PurchaseOrderReportRow[]): number
   return orders.reduce((sum, po) => sum + (Number(po.total_amount) || 0), 0);
 }
 
+/** PO ids already covered by a purchase invoice — explicit link or amount/supplier match. */
+export function getInvoicedPurchaseOrderIds(
+  orders: PurchaseOrderReportRow[],
+  invoices: PurchaseInvoiceReportRow[]
+): Set<string> {
+  const invoiced = new Set<string>();
+
+  for (const inv of invoices) {
+    if (inv.purchase_order_id) {
+      invoiced.add(inv.purchase_order_id);
+    }
+  }
+
+  for (const po of orders) {
+    if (invoiced.has(po.id)) continue;
+
+    const poTotal = Number(po.total_amount) || 0;
+    if (poTotal <= 0) continue;
+
+    const matched = invoices.some((inv) => {
+      if (inv.purchase_order_id) return false;
+      if (Math.abs((Number(inv.total_amount) || 0) - poTotal) > 0.02) return false;
+      if (po.supplier_id && inv.supplier_id && po.supplier_id !== inv.supplier_id) {
+        return false;
+      }
+      if (po.order_date && inv.invoice_date) {
+        return String(inv.invoice_date) >= String(po.order_date);
+      }
+      return true;
+    });
+
+    if (matched) invoiced.add(po.id);
+  }
+
+  return invoiced;
+}
+
+export function filterUninvoicedPurchaseOrders(
+  orders: PurchaseOrderReportRow[],
+  invoices: PurchaseInvoiceReportRow[]
+): PurchaseOrderReportRow[] {
+  const invoicedPoIds = getInvoicedPurchaseOrderIds(orders, invoices);
+  return orders.filter((po) => !invoicedPoIds.has(po.id));
+}
+
+export function mapPurchaseInvoicesToReportRows(invoices: PurchaseInvoiceReportRow[]) {
+  return invoices.map((inv) => ({
+    subcategory: inv.invoice_number || '',
+    amount: inv.total_amount || 0,
+    category: inv.invoice_date
+      ? new Date(inv.invoice_date).toLocaleDateString('en-IN')
+      : '',
+    invoice_number: inv.invoice_number,
+    invoice_date: inv.invoice_date,
+    supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'Miscellaneous',
+    subtotal: inv.subtotal || 0,
+    tax_amount: inv.tax_amount || 0,
+    payment_status: inv.payment_status || 'due',
+    record_type: 'Purchase Invoice' as const,
+    counts_toward_total: true,
+  }));
+}
+
+export function mapPurchaseReturnsToReportRows(invoices: PurchaseInvoiceReportRow[]) {
+  return invoices.map((inv) => ({
+    subcategory: inv.invoice_number || '',
+    amount: inv.total_amount || 0,
+    category: inv.invoice_date
+      ? new Date(inv.invoice_date).toLocaleDateString('en-IN')
+      : '',
+    invoice_number: inv.invoice_number,
+    invoice_date: inv.invoice_date,
+    supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'Miscellaneous',
+    subtotal: inv.subtotal || 0,
+    tax_amount: inv.tax_amount || 0,
+    payment_status: inv.payment_status || 'due',
+    record_type: 'Purchase Return' as const,
+    counts_toward_total: true,
+  }));
+}
+
+export function buildPurchaseReportSummary(params: {
+  purchaseInvoices: PurchaseInvoiceReportRow[];
+  purchaseReturns: PurchaseInvoiceReportRow[];
+}) {
+  const { purchaseInvoices, purchaseReturns } = params;
+
+  const invoiceSubtotal = purchaseInvoices.reduce(
+    (sum, inv) => sum + (Number(inv.subtotal) || 0),
+    0
+  );
+  const totalPurchaseReturns = purchaseReturns.reduce(
+    (sum, inv) => sum + (Number(inv.subtotal) || 0),
+    0
+  );
+
+  const invoiceTax = purchaseInvoices.reduce(
+    (sum, inv) => sum + (Number(inv.tax_amount) || 0),
+    0
+  );
+  const totalReturnTax = purchaseReturns.reduce(
+    (sum, inv) => sum + (Number(inv.tax_amount) || 0),
+    0
+  );
+
+  const invoiceTotal = purchaseInvoices.reduce(
+    (sum, inv) => sum + (Number(inv.total_amount) || 0),
+    0
+  );
+  const totalReturnAmount = purchaseReturns.reduce(
+    (sum, inv) => sum + (Number(inv.total_amount) || 0),
+    0
+  );
+
+  const netPurchase = invoiceSubtotal - totalPurchaseReturns;
+  const netTax = invoiceTax - totalReturnTax;
+  const netAmount = invoiceTotal - totalReturnAmount;
+
+  return {
+    totalSales: 0,
+    totalPurchases: invoiceSubtotal,
+    grossProfit: netTax,
+    netProfit: netAmount,
+    purchaseReturns: totalPurchaseReturns,
+    netPurchase,
+    totalTax: invoiceTax,
+    totalReturnTax,
+    netPurchaseTax: netTax,
+  };
+}
+
 export function mapPurchaseOrdersToReportRows(orders: PurchaseOrderReportRow[]) {
   return orders.map((po) => {
     const items = po.purchase_order_items || [];
@@ -119,6 +266,7 @@ export function mapPurchaseOrdersToReportRows(orders: PurchaseOrderReportRow[]) 
       total_quantity: totalQuantity,
       received_quantity: receivedQuantity,
       record_type: 'PO',
+      counts_toward_total: false,
     };
   });
 }
