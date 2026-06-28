@@ -6,6 +6,8 @@ import {
   type LedgerPostingLine,
 } from '@/services/ledgerPostingService';
 import { getFinancialYearForDate } from '@/utils/indianBusiness';
+import { getLedgerMappingSettings } from '@/services/accountingSettingsService';
+import { ensureDefaultChartOfAccounts } from '@/services/chartOfAccountsService';
 
 export interface InvoiceLedgerTotals {
   subtotal: number;
@@ -351,17 +353,88 @@ async function updatePartyEntryStatusForInvoice(
     .eq('user_id', userId);
 }
 
+/** Keep Sundry Debtors/Creditors entry status aligned with invoice payment_status. */
+export async function syncPartyLedgerPaymentStatus(params: {
+  invoiceId: string;
+  userId: string;
+  companyId: string;
+  paymentStatus: string;
+}): Promise<void> {
+  let mapping = await getLedgerMappingSettings(params.userId, params.companyId);
+  mapping = await ensureDefaultChartOfAccounts(
+    params.userId,
+    params.companyId,
+    mapping
+  );
+  await updatePartyEntryStatusForInvoice(
+    params.invoiceId,
+    params.userId,
+    mapping,
+    params.paymentStatus
+  );
+}
+
+/** Align party ledger line status with every invoice in the company (backfill). */
+export async function syncAllPartyLedgerPaymentStatuses(params: {
+  userId: string;
+  companyId: string;
+}): Promise<void> {
+  const { data: invoices, error } = await (supabase as any)
+    .from('invoices')
+    .select('id, payment_status')
+    .eq('company_id', params.companyId)
+    .eq('user_id', params.userId);
+
+  if (error) {
+    throw error;
+  }
+
+  if (!invoices?.length) return;
+
+  let mapping = await getLedgerMappingSettings(params.userId, params.companyId);
+  mapping = await ensureDefaultChartOfAccounts(
+    params.userId,
+    params.companyId,
+    mapping
+  );
+
+  for (const inv of invoices) {
+    await updatePartyEntryStatusForInvoice(
+      inv.id,
+      params.userId,
+      mapping,
+      inv.payment_status || 'due'
+    );
+  }
+}
+
 export async function postPaymentToLedger(
   params: PostPaymentLedgerParams
 ): Promise<{ transactionId?: string; skipped?: boolean }> {
+  const syncParty = async () => {
+    if (params.invoicePaymentStatus) {
+      await updatePartyEntryStatusForInvoice(
+        params.invoiceId,
+        params.userId,
+        params.mapping,
+        params.invoicePaymentStatus
+      );
+    }
+  };
+
   if (params.mapping.postOnPayment === false) {
+    await syncParty();
     return { skipped: true };
   }
 
   const amount = round2(params.amount);
-  if (amount <= 0) return { skipped: true };
+  if (amount <= 0) {
+    await syncParty();
+    return { skipped: true };
+  }
 
   if (await paymentVoucherAlreadyPosted(params.invoiceId, amount, params.paymentDate)) {
+    await syncParty();
     return { skipped: true };
   }
 
@@ -414,12 +487,7 @@ export async function postPaymentToLedger(
   });
 
   if (params.invoicePaymentStatus) {
-    await updatePartyEntryStatusForInvoice(
-      params.invoiceId,
-      params.userId,
-      params.mapping,
-      params.invoicePaymentStatus
-    );
+    await syncParty();
   }
 
   return { transactionId };

@@ -14,6 +14,7 @@ import { useSubscription } from "@/hooks/useSubscription";
 import { Plus, Edit, Trash2, Package, Download, Upload } from "lucide-react";
 import { downloadReportAsCSV } from "@/utils/pdfGenerator";
 import { formatIndianCurrency } from "@/utils/indianBusiness";
+import { fetchSuppliersForCompany } from "@/lib/supplierScope";
 import { ERPImportManager } from "@/components/import/ERPImportManager";
 import {
   AlertDialog,
@@ -125,19 +126,17 @@ export const ProductsManager = () => {
 
   const fetchSuppliers = async () => {
     try {
-      let query: any = (supabase as any)
-        .from('suppliers')
-        .select('id, company_name');
-
-      // Filter by company if a company is selected
-      if (selectedCompany?.company_name) {
-        query = (query as any).eq('company_id', selectedCompany.company_name);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSuppliers([]);
+        return;
       }
 
-      const { data, error } = await query.order('company_name');
-
-      if (error) throw error;
-      setSuppliers(data || []);
+      const data = await fetchSuppliersForCompany({
+        companyName: selectedCompany?.company_name,
+        userId: user.id,
+      });
+      setSuppliers(data);
     } catch (error) {
       logger.error('Failed to load suppliers:', error);
     }

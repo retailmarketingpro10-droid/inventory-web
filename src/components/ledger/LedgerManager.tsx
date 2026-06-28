@@ -29,6 +29,12 @@ import {
 } from "lucide-react";
 import { formatIndianCurrency, getCurrentFinancialYear } from "@/utils/indianBusiness";
 import { getSignedLedgerBalance, isCreditNormalLedgerType } from "@/services/ledgerBalanceService";
+import {
+  enrichLedgerEntriesWithPayments,
+  resolvePartyEntryStatus,
+  type LedgerEntryPaymentSummary,
+} from "@/services/ledgerEntryEnrichmentService";
+import { syncAllPartyLedgerPaymentStatuses } from "@/services/invoiceLedgerPostingService";
 import { StatCard } from "@/components/inventory/StatCard";
 import { DateInput } from "@/components/ui/date-input";
 import { 
@@ -78,6 +84,54 @@ interface LedgerStats {
   partialEntries: number;
 }
 
+function getEntryLineAmount(entry: LedgerEntry): number {
+  const debit = Number(entry.debit_amount) || 0;
+  const credit = Number(entry.credit_amount) || 0;
+  return debit > 0 ? debit : credit;
+}
+
+function renderPaymentBreakdown(
+  summary: LedgerEntryPaymentSummary | undefined,
+  partyLedger: boolean,
+  cashOrBank: boolean
+) {
+  if (!summary) return null;
+
+  if (summary.isPaymentVoucher && (partyLedger || cashOrBank)) {
+    return (
+      <p className="text-xs text-green-600 mt-0.5">Payment received</p>
+    );
+  }
+
+  if (!partyLedger) return null;
+
+  if (summary.totalPaid > 0 && summary.amountDue > 0) {
+    return (
+      <p className="text-xs mt-0.5">
+        <span className="text-green-600">Paid {formatIndianCurrency(summary.totalPaid)}</span>
+        <span className="text-muted-foreground"> · </span>
+        <span className="text-destructive">Due {formatIndianCurrency(summary.amountDue)}</span>
+      </p>
+    );
+  }
+
+  if (summary.amountDue > 0) {
+    return (
+      <p className="text-xs text-destructive mt-0.5">
+        Due {formatIndianCurrency(summary.amountDue)}
+      </p>
+    );
+  }
+
+  if (summary.totalPaid > 0) {
+    return (
+      <p className="text-xs text-green-600 mt-0.5">Paid in full</p>
+    );
+  }
+
+  return null;
+}
+
 function computeEntryRunningBalances(
   entries: LedgerEntry[],
   openingBalance: number,
@@ -110,6 +164,11 @@ function isPartyLedgerType(ledgerType: string): boolean {
   return t === 'receivables' || t === 'payables';
 }
 
+function isCashOrBankLedgerType(ledgerType: string): boolean {
+  const t = (ledgerType || '').toLowerCase();
+  return t === 'cash' || t === 'bank';
+}
+
 function displayEntryStatus(status: string, ledgerType: string): string {
   if (!isPartyLedgerType(ledgerType) && status === 'paid') {
     return 'posted';
@@ -121,6 +180,9 @@ export const LedgerManager = () => {
   const { selectedCompany } = useCompany();
   const [ledgers, setLedgers] = useState<Ledger[]>([]);
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [entryPaymentInfo, setEntryPaymentInfo] = useState<
+    Map<string, LedgerEntryPaymentSummary>
+  >(new Map());
   const [selectedLedger, setSelectedLedger] = useState<string>("");
   const [selectedFinancialYear, setSelectedFinancialYear] = useState<string>("");
   const [activeTab, setActiveTab] = useState<string>("ledgers");
@@ -292,6 +354,7 @@ export const LedgerManager = () => {
   const fetchLedgerEntries = useCallback(async () => {
     if (!selectedLedger) {
       setLedgerEntries([]);
+      setEntryPaymentInfo(new Map());
       return;
     }
 
@@ -299,6 +362,22 @@ export const LedgerManager = () => {
       const { data: userData } = await supabase.auth.getUser();
       if (!userData.user) {
         throw new Error('User not authenticated');
+      }
+
+      const ledger = ledgers.find((l) => l.id === selectedLedger);
+      if (
+        ledger &&
+        isPartyLedgerType(ledger.ledger_type) &&
+        selectedCompany?.company_name
+      ) {
+        try {
+          await syncAllPartyLedgerPaymentStatuses({
+            userId: userData.user.id,
+            companyId: selectedCompany.company_name,
+          });
+        } catch (syncError) {
+          logger.warn('Party ledger status sync failed:', syncError);
+        }
       }
 
       const { data, error } = await (supabase as any)
@@ -314,13 +393,19 @@ export const LedgerManager = () => {
         throw error;
       }
 
-      const ledger = ledgers.find((l) => l.id === selectedLedger);
       const withBalances = computeEntryRunningBalances(
         (data || []) as LedgerEntry[],
         ledger?.opening_balance ?? 0,
         ledger?.ledger_type ?? 'asset'
       );
 
+      const paymentInfo = await enrichLedgerEntriesWithPayments(
+        withBalances,
+        userData.user.id,
+        selectedCompany?.company_name
+      );
+
+      setEntryPaymentInfo(paymentInfo);
       setLedgerEntries(withBalances);
     } catch (error: any) {
       logger.error('Failed to load ledger entries:', error);
@@ -330,8 +415,9 @@ export const LedgerManager = () => {
         variant: "destructive"
       });
       setLedgerEntries([]);
+      setEntryPaymentInfo(new Map());
     }
-  }, [selectedLedger, selectedFinancialYear, ledgers, toast]);
+  }, [selectedLedger, selectedFinancialYear, ledgers, selectedCompany, toast]);
 
   // Effects
   useEffect(() => {
@@ -947,7 +1033,22 @@ export const LedgerManager = () => {
                 <div>
                   <CardTitle>Ledger Entries</CardTitle>
                   <CardDescription>
-                    {selectedLedger ? `Managing entries for selected ledger` : 'Select a ledger to view entries'}
+                    {selectedLedger ? (
+                      <>
+                        Amount = value posted on this ledger for that entry (invoice line).
+                        {selectedLedgerMeta ? (
+                          <>
+                            {' '}
+                            Ledger closing balance:{' '}
+                            <span className="font-medium text-foreground">
+                              {formatIndianCurrency(selectedLedgerMeta.current_balance)}
+                            </span>
+                          </>
+                        ) : null}
+                      </>
+                    ) : (
+                      'Select a ledger to view entries'
+                    )}
                   </CardDescription>
                 </div>
                 {selectedLedger && (
@@ -1046,20 +1147,30 @@ export const LedgerManager = () => {
                           <TableHead>Description</TableHead>
                           <TableHead className="text-right">Debit</TableHead>
                           <TableHead className="text-right">Credit</TableHead>
-                          <TableHead className="text-right">Balance</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead>Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {ledgerEntries.map((entry) => {
-                          const entryStatus = displayEntryStatus(
-                            entry.status,
-                            selectedLedgerMeta?.ledger_type || ''
-                          );
                           const partyLedger = isPartyLedgerType(
                             selectedLedgerMeta?.ledger_type || ''
                           );
+                          const cashOrBank = isCashOrBankLedgerType(
+                            selectedLedgerMeta?.ledger_type || ''
+                          );
+                          const paymentSummary = entryPaymentInfo.get(entry.id);
+                          const entryStatus = partyLedger
+                            ? resolvePartyEntryStatus(
+                                entry.status,
+                                selectedLedgerMeta?.ledger_type || '',
+                                paymentSummary
+                              )
+                            : displayEntryStatus(
+                                entry.status,
+                                selectedLedgerMeta?.ledger_type || ''
+                              );
                           return (
                           <TableRow key={entry.id}>
                             <TableCell>
@@ -1094,9 +1205,13 @@ export const LedgerManager = () => {
                               {entry.credit_amount > 0 ? formatIndianCurrency(entry.credit_amount) : '-'}
                             </TableCell>
                             <TableCell className="text-right font-medium">
-                              {formatIndianCurrency(entry.balance)}
+                              <div>
+                                {formatIndianCurrency(getEntryLineAmount(entry))}
+                                {renderPaymentBreakdown(paymentSummary, partyLedger, cashOrBank)}
+                              </div>
                             </TableCell>
                             <TableCell>
+                              <div className="flex flex-col gap-1">
                               <div className="flex items-center gap-2">
                                 {getStatusIcon(entryStatus)}
                                 <Badge 
@@ -1110,12 +1225,23 @@ export const LedgerManager = () => {
                                   {entryStatus.toUpperCase()}
                                 </Badge>
                               </div>
+                              {partyLedger &&
+                                paymentSummary &&
+                                !paymentSummary.isPaymentVoucher &&
+                                paymentSummary.totalPaid > 0 &&
+                                paymentSummary.amountDue > 0 && (
+                                  <span className="text-xs text-muted-foreground">
+                                    {formatIndianCurrency(paymentSummary.totalPaid)} of{' '}
+                                    {formatIndianCurrency(paymentSummary.invoiceTotal)} collected
+                                  </span>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
                                 {partyLedger ? (
                                 <Select 
-                                  value={entry.status}
+                                  value={entryStatus}
                                   onValueChange={(value) => updateEntryStatus(entry.id, value)}
                                 >
                                   <SelectTrigger className="w-24">

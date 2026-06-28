@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useCompany } from "@/contexts/CompanyContext";
+import { fetchSuppliersForCompany } from "@/lib/supplierScope";
 import { useSubscription } from "@/hooks/useSubscription";
 import { Plus, Building2, Phone, Mail, MapPin, Edit, Trash2, Download, Upload } from "lucide-react";
 import { downloadReportAsCSV } from "@/utils/pdfGenerator";
@@ -63,19 +64,19 @@ export const SuppliersManager = () => {
 
   const fetchSuppliers = async () => {
     try {
-      let query: any = (supabase as any)
-        .from('suppliers')
-        .select('*');
-
-      // Filter by company if a company is selected
-      if (selectedCompany?.company_name) {
-        query = (query as any).eq('company_id', selectedCompany.company_name);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setSuppliers([]);
+        return;
       }
 
-      const { data, error } = await (query as any).order('company_name');
+      const data = await fetchSuppliersForCompany({
+        companyName: selectedCompany?.company_name,
+        userId: user.id,
+        select: '*',
+      });
 
-      if (error) throw error;
-      setSuppliers(data || []);
+      setSuppliers(data as Supplier[]);
     } catch (error) {
       toast({
         title: "Error",
@@ -94,6 +95,15 @@ export const SuppliersManager = () => {
       // Get current user for RLS compliance
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
+
+      if (!selectedCompany?.company_name) {
+        toast({
+          title: "Validation Error",
+          description: "Please select a company before adding a supplier",
+          variant: "destructive"
+        });
+        return;
+      }
 
       const supplierData = {
         ...formData,

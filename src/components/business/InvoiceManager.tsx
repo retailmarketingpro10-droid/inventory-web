@@ -24,6 +24,7 @@ import { ensureDefaultChartOfAccounts } from "@/services/chartOfAccountsService"
 import {
   postInvoiceToLedger,
   postPaymentToLedger,
+  syncPartyLedgerPaymentStatus,
 } from "@/services/invoiceLedgerPostingService";
 import { reconcileStockInHandLedger } from "@/services/stockLedgerSyncService";
 import { resolvePurchaseOrderIdForInvoice } from "@/services/inventoryPurchaseService";
@@ -1517,10 +1518,7 @@ export const InvoiceManager = () => {
       if (invoiceError) throw invoiceError;
 
       try {
-        if (
-          selectedCompany?.company_name &&
-          selectedInvoice.payment_status !== 'paid'
-        ) {
+        if (selectedCompany?.company_name) {
           let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
           mapping = await ensureDefaultChartOfAccounts(
             user.id,
@@ -1529,18 +1527,27 @@ export const InvoiceManager = () => {
           );
           await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
 
-          await postPaymentToLedger({
-            invoiceId: selectedInvoice.id,
-            invoiceNumber: selectedInvoice.invoice_number,
-            invoiceType: selectedInvoice.invoice_type,
-            paymentDate: paymentData.payment_date,
-            amount: paymentData.amount,
-            paymentMethod: paymentData.payment_method,
-            companyId: selectedCompany.company_name,
-            userId: user.id,
-            mapping,
-            invoicePaymentStatus: newPaymentStatus,
-          });
+          if (selectedInvoice.payment_status !== 'paid') {
+            await postPaymentToLedger({
+              invoiceId: selectedInvoice.id,
+              invoiceNumber: selectedInvoice.invoice_number,
+              invoiceType: selectedInvoice.invoice_type,
+              paymentDate: paymentData.payment_date,
+              amount: paymentData.amount,
+              paymentMethod: paymentData.payment_method,
+              companyId: selectedCompany.company_name,
+              userId: user.id,
+              mapping,
+              invoicePaymentStatus: newPaymentStatus,
+            });
+          } else {
+            await syncPartyLedgerPaymentStatus({
+              invoiceId: selectedInvoice.id,
+              userId: user.id,
+              companyId: selectedCompany.company_name,
+              paymentStatus: newPaymentStatus,
+            });
+          }
         }
       } catch (ledgerError: any) {
         logger.error('Ledger posting for payment failed (non-blocking):', ledgerError);
@@ -1600,54 +1607,65 @@ export const InvoiceManager = () => {
 
       if (error) throw error;
 
-      if (
-        invoice &&
-        selectedCompany?.company_name &&
-        newStatus === 'paid' &&
-        invoice.payment_status !== 'paid'
-      ) {
+      if (invoice && selectedCompany?.company_name) {
         try {
           const { data: { user } } = await supabase.auth.getUser();
           if (user?.id) {
-            const { data: payments } = await (supabase as any)
-              .from('invoice_payments')
-              .select('amount')
-              .eq('invoice_id', invoiceId)
-              .eq('user_id', user.id);
-            const totalPaid = (payments || []).reduce(
-              (sum: number, p: { amount?: number }) => sum + (Number(p.amount) || 0),
-              0
-            );
-            const amountToPost = Math.max(0, (invoice.total_amount || 0) - totalPaid);
-            if (amountToPost > 0) {
-              let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
-              mapping = await ensureDefaultChartOfAccounts(
-                user.id,
-                selectedCompany.company_name,
-                mapping
+            if (newStatus === 'paid' && invoice.payment_status !== 'paid') {
+              const { data: payments } = await (supabase as any)
+                .from('invoice_payments')
+                .select('amount')
+                .eq('invoice_id', invoiceId)
+                .eq('user_id', user.id);
+              const totalPaid = (payments || []).reduce(
+                (sum: number, p: { amount?: number }) => sum + (Number(p.amount) || 0),
+                0
               );
-              await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
-              await postPaymentToLedger({
+              const amountToPost = Math.max(0, (invoice.total_amount || 0) - totalPaid);
+              if (amountToPost > 0) {
+                let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
+                mapping = await ensureDefaultChartOfAccounts(
+                  user.id,
+                  selectedCompany.company_name,
+                  mapping
+                );
+                await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
+                await postPaymentToLedger({
+                  invoiceId: invoice.id,
+                  invoiceNumber: invoice.invoice_number,
+                  invoiceType: invoice.invoice_type,
+                  paymentDate: new Date().toISOString().split('T')[0],
+                  amount: amountToPost,
+                  paymentMethod: 'cash',
+                  companyId: selectedCompany.company_name,
+                  userId: user.id,
+                  mapping,
+                  invoicePaymentStatus: newStatus,
+                });
+              } else {
+                await syncPartyLedgerPaymentStatus({
+                  invoiceId: invoice.id,
+                  userId: user.id,
+                  companyId: selectedCompany.company_name,
+                  paymentStatus: newStatus,
+                });
+              }
+            } else if (newStatus === 'partial' || newStatus === 'due') {
+              await syncPartyLedgerPaymentStatus({
                 invoiceId: invoice.id,
-                invoiceNumber: invoice.invoice_number,
-                invoiceType: invoice.invoice_type,
-                paymentDate: new Date().toISOString().split('T')[0],
-                amount: amountToPost,
-                paymentMethod: 'cash',
-                companyId: selectedCompany.company_name,
                 userId: user.id,
-                mapping,
-                invoicePaymentStatus: newStatus,
+                companyId: selectedCompany.company_name,
+                paymentStatus: newStatus,
               });
             }
           }
         } catch (ledgerError: any) {
-          logger.error('Ledger posting for payment status failed:', ledgerError);
+          logger.error('Ledger sync for payment status failed:', ledgerError);
           toast({
-            title: 'Ledger not posted',
+            title: 'Ledger not synced',
             description:
               ledgerError.message ||
-              'Status updated but cash/receipt voucher failed. Record payment or check ledger mapping.',
+              'Status updated but ledger party line failed to sync.',
             variant: 'destructive',
           });
         }
@@ -1677,44 +1695,55 @@ export const InvoiceManager = () => {
 
       if (error) throw error;
 
-      if (
-        invoice &&
-        selectedCompany?.company_name &&
-        newStatus === 'paid' &&
-        invoice.payment_status !== 'paid'
-      ) {
+      if (invoice && selectedCompany?.company_name) {
         try {
           const { data: { user } } = await supabase.auth.getUser();
           if (user?.id) {
-            const { data: payments } = await (supabase as any)
-              .from('invoice_payments')
-              .select('amount')
-              .eq('invoice_id', invoiceId)
-              .eq('user_id', user.id);
-            const totalPaid = (payments || []).reduce(
-              (sum: number, p: { amount?: number }) => sum + (Number(p.amount) || 0),
-              0
-            );
-            const amountToPost = Math.max(0, (invoice.total_amount || 0) - totalPaid);
-            if (amountToPost > 0) {
-              let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
-              mapping = await ensureDefaultChartOfAccounts(
-                user.id,
-                selectedCompany.company_name,
-                mapping
+            if (newStatus === 'paid' && invoice.payment_status !== 'paid') {
+              const { data: payments } = await (supabase as any)
+                .from('invoice_payments')
+                .select('amount')
+                .eq('invoice_id', invoiceId)
+                .eq('user_id', user.id);
+              const totalPaid = (payments || []).reduce(
+                (sum: number, p: { amount?: number }) => sum + (Number(p.amount) || 0),
+                0
               );
-              await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
-              await postPaymentToLedger({
+              const amountToPost = Math.max(0, (invoice.total_amount || 0) - totalPaid);
+              if (amountToPost > 0) {
+                let mapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
+                mapping = await ensureDefaultChartOfAccounts(
+                  user.id,
+                  selectedCompany.company_name,
+                  mapping
+                );
+                await saveLedgerMappingSettings(user.id, selectedCompany.company_name, mapping);
+                await postPaymentToLedger({
+                  invoiceId: invoice.id,
+                  invoiceNumber: invoice.invoice_number,
+                  invoiceType: invoice.invoice_type,
+                  paymentDate: new Date().toISOString().split('T')[0],
+                  amount: amountToPost,
+                  paymentMethod: 'cash',
+                  companyId: selectedCompany.company_name,
+                  userId: user.id,
+                  mapping,
+                  invoicePaymentStatus: newStatus,
+                });
+              } else {
+                await syncPartyLedgerPaymentStatus({
+                  invoiceId: invoice.id,
+                  userId: user.id,
+                  companyId: selectedCompany.company_name,
+                  paymentStatus: newStatus,
+                });
+              }
+            } else if (newStatus === 'partial' || newStatus === 'due') {
+              await syncPartyLedgerPaymentStatus({
                 invoiceId: invoice.id,
-                invoiceNumber: invoice.invoice_number,
-                invoiceType: invoice.invoice_type,
-                paymentDate: new Date().toISOString().split('T')[0],
-                amount: amountToPost,
-                paymentMethod: 'cash',
-                companyId: selectedCompany.company_name,
                 userId: user.id,
-                mapping,
-                invoicePaymentStatus: newStatus,
+                companyId: selectedCompany.company_name,
+                paymentStatus: newStatus,
               });
             }
           }

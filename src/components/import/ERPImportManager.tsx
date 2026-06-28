@@ -13,6 +13,7 @@ import { parseFileContent, getFileFormatDescription } from "@/utils/fileParser";
 import { formatIndianCurrency } from "@/utils/indianBusiness";
 import { cn } from "@/lib/utils";
 import { logger } from "@/lib/logger";
+import { fetchSuppliersForCompany } from "@/lib/supplierScope";
 
 interface ERPImportManagerProps {
   onClose: () => void;
@@ -567,19 +568,11 @@ export function ERPImportManager({ onClose, onImportComplete }: ERPImportManager
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const { data, error } = await supabase
-          .from('suppliers')
-          .select('id, company_name')
-          .eq('company_id', selectedCompany.company_name)
-          .eq('user_id', user.id)
-          .order('company_name');
-
-        if (error) {
-          logger.error('Error fetching suppliers:', error);
-          setSuppliers([]);
-        } else {
-          setSuppliers(data || []);
-        }
+        const data = await fetchSuppliersForCompany({
+          companyName: selectedCompany.company_name,
+          userId: user.id,
+        });
+        setSuppliers(data);
       } catch (error) {
         logger.error('Error fetching suppliers:', error);
         setSuppliers([]);

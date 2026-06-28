@@ -29,6 +29,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { logger } from "@/lib/logger";
+import { fetchSuppliersForCompany } from "@/lib/supplierScope";
 
 interface PurchaseOrder {
   id: string;
@@ -215,103 +216,17 @@ export const PurchaseOrderManager = () => {
 
   const fetchSuppliers = async () => {
     try {
-      // Get current user for RLS compliance
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        logger.warn('No user found, cannot fetch suppliers');
         setSuppliers([]);
         return;
       }
 
-      // Build query - explicitly select only id and company_name from suppliers table
-      // Try to fetch suppliers with user_id matching, or with null user_id (legacy)
-      const query = (supabase as any)
-        .from('suppliers')
-        .select('id, company_name')
-        .or(`user_id.eq.${user.id},user_id.is.null`)
-        .not('company_name', 'is', null); // Ensure company_name is not null
-
-      // Filter by company if a company is selected
-      if (selectedCompany?.company_name) {
-        // First get all suppliers, then filter by company_id in memory
-        const { data: allSuppliers, error: allError } = await query.order('company_name');
-        
-        if (allError) {
-          logger.error('Error fetching suppliers:', allError);
-          // If OR query fails, try separate queries
-          const { data: userSuppliers } = await (supabase as any)
-            .from('suppliers')
-            .select('id, company_name, company_id')
-            .eq('user_id', user.id)
-            .not('company_name', 'is', null)
-            .order('company_name');
-          
-          const { data: legacySuppliers } = await (supabase as any)
-            .from('suppliers')
-            .select('id, company_name, company_id')
-            .is('user_id', null)
-            .not('company_name', 'is', null)
-            .order('company_name');
-          
-          const combined = [...(userSuppliers || []), ...(legacySuppliers || [])];
-          const filtered = combined.filter(s => 
-            s && s.id && s.company_name && (!s.company_id || s.company_id === selectedCompany.company_name)
-          );
-          
-          console.log('Loaded suppliers (fallback):', filtered.length, 'suppliers');
-          setSuppliers(filtered.map(s => ({ id: s.id, company_name: s.company_name })));
-          return;
-        }
-        
-        // Get company_id for filtering
-        const { data: suppliersWithCompany } = await (supabase as any)
-          .from('suppliers')
-          .select('id, company_name, company_id')
-          .or(`user_id.eq.${user.id},user_id.is.null`)
-          .not('company_name', 'is', null)
-          .order('company_name');
-        
-        // Filter in memory: show suppliers matching company_id or null
-        const filtered = (suppliersWithCompany || []).filter(s => 
-          s && s.id && s.company_name && (!s.company_id || s.company_id === selectedCompany.company_name)
-        );
-        
-        console.log('Loaded suppliers:', filtered.length, 'suppliers (filtered from', suppliersWithCompany?.length || 0, 'total)');
-        setSuppliers(filtered.map(s => ({ id: s.id, company_name: s.company_name })));
-        return;
-      }
-      
-      // No company filter - show all suppliers for user
-      const { data, error } = await query.order('company_name');
-
-      if (error) {
-        logger.error('Failed to load suppliers - error:', error);
-        // Fallback: try separate queries
-        const { data: userSuppliers } = await (supabase as any)
-          .from('suppliers')
-          .select('id, company_name')
-          .eq('user_id', user.id)
-          .not('company_name', 'is', null)
-          .order('company_name');
-        
-        const { data: legacySuppliers } = await (supabase as any)
-          .from('suppliers')
-          .select('id, company_name')
-          .is('user_id', null)
-          .not('company_name', 'is', null)
-          .order('company_name');
-        
-        const combined = [...(userSuppliers || []), ...(legacySuppliers || [])];
-        const validSuppliers = combined.filter(s => s && s.id && s.company_name);
-        console.log('Loaded suppliers (fallback):', validSuppliers.length, 'suppliers');
-        setSuppliers(validSuppliers.map(s => ({ id: s.id, company_name: s.company_name })));
-        return;
-      }
-      
-      // Ensure we only have valid suppliers with id and company_name
-      const validSuppliers = (data || []).filter(s => s && s.id && s.company_name);
-      console.log('Loaded suppliers:', validSuppliers.length, 'suppliers (filtered from', data?.length || 0, 'total)');
-      setSuppliers(validSuppliers.map(s => ({ id: s.id, company_name: s.company_name })));
+      const data = await fetchSuppliersForCompany({
+        companyName: selectedCompany?.company_name,
+        userId: user.id,
+      });
+      setSuppliers(data);
     } catch (error) {
       logger.error('Failed to load suppliers:', error);
       setSuppliers([]);
