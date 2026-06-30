@@ -342,14 +342,30 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
   }
 
   const directExpenseIds = mapping.directExpenseAccountIds || [];
+  const directExpenseSet = new Set([
+    ...directExpenseIds,
+    ...(mapping.purchaseAccountId ? [mapping.purchaseAccountId] : []),
+  ]);
   const directExpenses = Math.max(
     0,
     netExpense(sumMovementForIds(periodMap, directExpenseIds))
   );
 
+  const autoIndirectExpenseIds = ledgers
+    .filter((l) => {
+      const t = (l.ledger_type || '').toLowerCase();
+      return (
+        (t === 'expense' || t === 'expenses') && !directExpenseSet.has(l.id)
+      );
+    })
+    .map((l) => l.id);
+
   const indirectExpenseIds = [
-    ...(mapping.indirectExpenseAccountIds || []),
-    ...(mapping.discountAllowedAccountId ? [mapping.discountAllowedAccountId] : []),
+    ...new Set([
+      ...(mapping.indirectExpenseAccountIds || []),
+      ...(mapping.discountAllowedAccountId ? [mapping.discountAllowedAccountId] : []),
+      ...autoIndirectExpenseIds,
+    ]),
   ];
   const indirectIncomeIds = [
     ...(mapping.indirectIncomeAccountIds || []),

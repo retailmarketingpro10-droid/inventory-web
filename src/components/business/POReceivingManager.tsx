@@ -12,6 +12,10 @@ import { Package, Check, AlertTriangle, Save, RotateCcw } from 'lucide-react';
 import { formatIndianCurrency } from '@/utils/indianBusiness';
 import { calculateGSTBreakdown, GSTConfig } from '@/utils/gstBreakdown';
 import { logger } from '@/lib/logger';
+import { applyPoReceiptStockUpdates } from '@/services/inventoryPurchaseService';
+import { reconcileStockInHandLedger } from '@/services/stockLedgerSyncService';
+import { getLedgerMappingSettings } from '@/services/accountingSettingsService';
+import { ensureDefaultChartOfAccounts } from '@/services/chartOfAccountsService';
 
 interface PurchaseOrderItem {
   id: string;
@@ -241,6 +245,40 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
         }
       }
 
+      const stockResult = await applyPoReceiptStockUpdates({
+        companyId: po.company_id,
+        items: itemsToUpdate.map((item) => ({
+          product_id: item.product_id,
+          receiveQty: receivingItems[item.id] || 0,
+          description: item.description,
+        })),
+      });
+
+      if (stockResult.failed > 0) {
+        stockResult.messages.forEach((message) => logger.warn('PO receipt stock:', message));
+      }
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && po.company_id && stockResult.updated > 0) {
+          let stockMapping = await getLedgerMappingSettings(user.id, po.company_id);
+          stockMapping = await ensureDefaultChartOfAccounts(
+            user.id,
+            po.company_id,
+            stockMapping
+          );
+          await reconcileStockInHandLedger({
+            companyId: po.company_id,
+            userId: user.id,
+            mapping: stockMapping,
+            asOfDate: new Date().toISOString().split('T')[0],
+            reference: po.po_number,
+          });
+        }
+      } catch (stockLedgerError) {
+        logger.error('Stock-in-Hand sync after PO receipt failed (non-blocking):', stockLedgerError);
+      }
+
       // Check if all items are fully received
       const allItemsReceived = poItems.every(item => 
         (item.received_quantity || 0) + (receivingItems[item.id] || 0) >= item.quantity
@@ -272,7 +310,9 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
 
       toast({
         title: "Success",
-        description: `Receipt recorded for ${itemsToUpdate.length} item(s). PO marked as ${allItemsReceived ? 'received' : 'partially received'}. Stock updates when you create a purchase invoice.`
+        description: stockResult.updated > 0
+          ? `Receipt recorded for ${itemsToUpdate.length} item(s). Stock updated for ${stockResult.updated} product(s). PO marked as ${allItemsReceived ? 'received' : 'partially received'}.`
+          : `Receipt recorded for ${itemsToUpdate.length} item(s). PO marked as ${allItemsReceived ? 'received' : 'partially received'}.`,
       });
 
       onInventoryUpdated();
@@ -335,7 +375,7 @@ export const POReceivingManager: React.FC<POReceivingManagerProps> = ({
             Receive Items - {po.po_number}
           </DialogTitle>
           <DialogDescription>
-            Confirm the quantities received for this purchase order. Inventory is updated when you create a purchase invoice.
+            Confirm the quantities received for this purchase order. Product stock is updated when you confirm receipt here.
           </DialogDescription>
         </DialogHeader>
 

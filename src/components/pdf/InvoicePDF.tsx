@@ -19,6 +19,8 @@ interface Invoice {
   total_amount: number;
   discount_amount?: number;
   discount_percentage?: number;
+  additional_charges_after_gst?: number;
+  additional_charges_label?: string | null;
   notes: string | null;
   suppliers?: {
     company_name: string;
@@ -318,6 +320,14 @@ export const InvoicePDF: React.FC<InvoicePDFProps> = ({
           <View style={styles.totalRow}>
             <Text>Add: Tax Amount:</Text>
             <Text>{formatIndianCurrency(invoice.tax_amount, false)}</Text>
+          </View>
+        )}
+        {(invoice.additional_charges_after_gst || 0) > 0 && (
+          <View style={styles.totalRow}>
+            <Text>
+              Add: {invoice.additional_charges_label || 'Additional charges'} (after GST):
+            </Text>
+            <Text>{formatIndianCurrency(invoice.additional_charges_after_gst || 0, false)}</Text>
           </View>
         )}
         <View style={[styles.totalRow, styles.grandTotal]}>

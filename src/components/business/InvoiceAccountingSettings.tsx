@@ -374,6 +374,61 @@ export function InvoiceAccountingSettings() {
             })}
           </div>
 
+          <div className="space-y-3 rounded-lg border p-4 sm:col-span-2">
+            <Label>Indirect expense ledgers (petty / office expenses)</Label>
+            <p className="text-xs text-muted-foreground">
+              Included in Profit &amp; Loss under Indirect Expenses. New petty expense
+              accounts are added here automatically when you record a voucher.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {ledgers
+                .filter((l) => {
+                  const t = l.ledger_type?.toLowerCase() || '';
+                  return (
+                    (t === 'expense' || t === 'expenses') &&
+                    l.name.toLowerCase() !== 'purchase account'
+                  );
+                })
+                .map((l) => {
+                  const checked = (mapping.indirectExpenseAccountIds || []).includes(l.id);
+                  return (
+                    <label
+                      key={l.id}
+                      className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        className="rounded border-input"
+                        checked={checked}
+                        onChange={(e) => {
+                          const ids = mapping.indirectExpenseAccountIds || [];
+                          setMapping((prev) => ({
+                            ...prev,
+                            indirectExpenseAccountIds: e.target.checked
+                              ? [...ids, l.id]
+                              : ids.filter((id) => id !== l.id),
+                          }));
+                        }}
+                      />
+                      <span>{l.name}</span>
+                    </label>
+                  );
+                })}
+              {ledgers.filter((l) => {
+                const t = l.ledger_type?.toLowerCase() || '';
+                return (
+                  (t === 'expense' || t === 'expenses') &&
+                  l.name.toLowerCase() !== 'purchase account'
+                );
+              }).length === 0 && (
+                <p className="text-sm text-muted-foreground col-span-2">
+                  No expense ledgers yet. Use Ledger → Petty Expenses to create Tea &amp;
+                  Refreshments, etc.
+                </p>
+              )}
+            </div>
+          </div>
+
           <p className="text-sm text-muted-foreground">
             Sales/Purchase vouchers: Dr Party or Cash/Bank, Cr Sales + Output GST (or Dr Purchase +
             Input GST, Cr Party). Payment vouchers: Dr Cash/Bank Cr Debtors (receipt) or Dr

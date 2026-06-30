@@ -46,6 +46,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { logger } from "@/lib/logger";
+import { PettyExpenseManager } from "@/components/ledger/PettyExpenseManager";
 
 interface LedgerEntry {
   id: string;
@@ -912,6 +913,9 @@ export const LedgerManager = () => {
           <TabsTrigger value="ledgers">
             Ledgers
           </TabsTrigger>
+          <TabsTrigger value="petty-expenses">
+            Petty Expenses
+          </TabsTrigger>
           <TabsTrigger value="entries" disabled={!selectedLedger}>
             Entries {selectedLedger && `(${ledgerEntries.length})`}
           </TabsTrigger>
@@ -1024,6 +1028,10 @@ export const LedgerManager = () => {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="petty-expenses">
+          <PettyExpenseManager />
         </TabsContent>
 
         <TabsContent value="entries">

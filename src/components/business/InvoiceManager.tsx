@@ -27,7 +27,11 @@ import {
   syncPartyLedgerPaymentStatus,
 } from "@/services/invoiceLedgerPostingService";
 import { reconcileStockInHandLedger } from "@/services/stockLedgerSyncService";
-import { resolvePurchaseOrderIdForInvoice } from "@/services/inventoryPurchaseService";
+import { resolvePurchaseOrderIdForInvoice, shouldSkipPurchaseInvoiceStockUpdate } from "@/services/inventoryPurchaseService";
+import {
+  fetchSuppliersForCompany,
+  type SupplierListItem,
+} from "@/lib/supplierScope";
 import {
   fetchEligibleOriginalInvoices,
   fetchOriginalInvoiceSummary,
@@ -63,6 +67,8 @@ interface Invoice {
   total_amount: number;
   discount_amount?: number;
   discount_percentage?: number;
+  additional_charges_after_gst?: number;
+  additional_charges_label?: string | null;
   status: string;
   notes: string | null;
   original_invoice_id?: string | null;
@@ -114,11 +120,60 @@ interface Product {
   name: string;
   description?: string | null;
   hsn_code?: string | null;
+  purchase_price?: number | null;
   selling_price: number | null;
   gst_rate: number;
   current_stock?: number;
   min_stock_level?: number | null;
   sku?: string | null;
+}
+
+function parseProductPrice(value: unknown): number {
+  if (value == null) return 0;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return parseFloat(value) || 0;
+  return Number(value) || 0;
+}
+
+function isPurchaseSideInvoice(invoiceType: string): boolean {
+  return invoiceType === 'purchase' || invoiceType === 'purchase_return';
+}
+
+function isStandardSalesOrPurchaseInvoice(invoiceType: string): boolean {
+  return invoiceType === 'sales' || invoiceType === 'purchase';
+}
+
+function getProductDefaultUnitPrice(product: Product, invoiceType: string): number {
+  if (isPurchaseSideInvoice(invoiceType)) {
+    const purchase = parseProductPrice(product.purchase_price);
+    if (purchase > 0) return purchase;
+    return parseProductPrice(product.selling_price);
+  }
+  const selling = parseProductPrice(product.selling_price);
+  if (selling > 0) return selling;
+  return parseProductPrice(product.purchase_price);
+}
+
+function resolveLineItemProductId(
+  item: { product_id?: string; description: string },
+  products: Product[]
+): string | null {
+  if (item.product_id) return item.product_id;
+  const product = products.find(
+    (p) => p.name.toLowerCase().trim() === item.description.toLowerCase().trim()
+  );
+  return product?.id ?? null;
+}
+
+function invoiceReducesStock(invoiceType: string, entityType: string): boolean {
+  if (entityType === 'customer' && invoiceType === 'sales') return true;
+  if (
+    (entityType === 'supplier' || entityType === 'wholesaler') &&
+    invoiceType === 'purchase_return'
+  ) {
+    return true;
+  }
+  return false;
 }
 
 interface PurchaseOrder {
@@ -165,6 +220,7 @@ export const InvoiceManager = () => {
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [hidePaidInvoices, setHidePaidInvoices] = useState(true);
   const [businessEntities, setBusinessEntities] = useState<BusinessEntity[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierListItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [selectedPO, setSelectedPO] = useState<string>("");
@@ -179,6 +235,7 @@ export const InvoiceManager = () => {
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([]);
   const [showNewEntityForm, setShowNewEntityForm] = useState(false);
   const [showDiscountFields, setShowDiscountFields] = useState(false);
+  const [showAdditionalChargesFields, setShowAdditionalChargesFields] = useState(false);
   const [formData, setFormData] = useState({
     entity_id: "",
     entity_type: "customer" as string,
@@ -189,7 +246,9 @@ export const InvoiceManager = () => {
     due_date: "",
     notes: "",
     discount_amount: 0,
-    discount_percentage: 0
+    discount_percentage: 0,
+    additional_charges_after_gst: 0,
+    additional_charges_label: "Freight / Courier / Packaging",
   });
   const [newEntityData, setNewEntityData] = useState({
     name: "",
@@ -218,6 +277,7 @@ export const InvoiceManager = () => {
   const [companyState, setCompanyState] = useState('27'); // Default to Maharashtra
   const [forceIGST, setForceIGST] = useState(false); // Manual IGST selection override
   const [applyTaxOnSubtotal, setApplyTaxOnSubtotal] = useState(false); // Apply tax on subtotal instead of line items
+  const [taxInclusive, setTaxInclusive] = useState(false); // Tax-inclusive pricing (no GST added on top)
   const [subtotalTaxRate, setSubtotalTaxRate] = useState(18); // Tax rate for subtotal
   const [productSearch, setProductSearch] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -259,6 +319,7 @@ export const InvoiceManager = () => {
   useEffect(() => {
     fetchInvoices();
     fetchBusinessEntities();
+    fetchSuppliers();
     fetchProducts();
     if (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return') {
       fetchPurchaseOrders(formData.invoice_type);
@@ -487,11 +548,49 @@ export const InvoiceManager = () => {
     }
   };
 
+  const fetchSuppliers = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const data = await fetchSuppliersForCompany({
+        companyName: selectedCompany?.company_name,
+        userId: user.id,
+        select: 'id, company_name, email, phone, address, gstin',
+      });
+      setSuppliers(data);
+    } catch (error) {
+      logger.error('Failed to load suppliers:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load suppliers for this company",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const entityOptionsForType = (entityType: string) => {
+    if (entityType === 'supplier') {
+      return suppliers.map((s) => ({
+        id: s.id,
+        label: s.company_name,
+        sublabel: 'supplier',
+      }));
+    }
+    return businessEntities
+      .filter((entity) => entity.entity_type === entityType)
+      .map((entity) => ({
+        id: entity.id,
+        label: entity.name,
+        sublabel: entity.entity_type,
+      }));
+  };
+
   const fetchProducts = async () => {
     try {
       let query: any = supabase
         .from('products')
-        .select('id, name, description, selling_price, gst_rate, current_stock, min_stock_level, hsn_code');
+        .select('id, name, description, purchase_price, selling_price, gst_rate, current_stock, min_stock_level, hsn_code');
 
       // Filter by company if a company is selected
       if (selectedCompany?.company_name) {
@@ -579,7 +678,7 @@ export const InvoiceManager = () => {
           description: item.description,
           quantity: (formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return') ? 0 : item.quantity,
           unit_price: item.unit_price,
-          gst_rate: item.gst_rate,
+          gst_rate: taxInclusive ? 0 : item.gst_rate,
           max_quantity: (formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return') ? item.quantity : undefined
         }));
         setLineItems(items);
@@ -638,6 +737,7 @@ export const InvoiceManager = () => {
     
     const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount);
 
+    if (!taxInclusive) {
     // Calculate tax based on whether tax is applied on subtotal or individual items
     if (applyTaxOnSubtotal) {
       // Apply tax on subtotal after discount
@@ -691,13 +791,20 @@ export const InvoiceManager = () => {
         }
       });
     }
+    }
+
+    const additionalChargesAfterGst = Math.max(
+      0,
+      Number(formData.additional_charges_after_gst) || 0
+    );
 
     return {
       subtotal,
       discountAmount,
       subtotalAfterDiscount,
       taxAmount,
-      total: subtotalAfterDiscount + taxAmount,
+      additionalChargesAfterGst,
+      total: subtotalAfterDiscount + taxAmount + additionalChargesAfterGst,
       cgst,
       sgst,
       igst
@@ -710,45 +817,81 @@ export const InvoiceManager = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
 
-      const entityData = {
-        ...newEntityData,
-        entity_type: formData.entity_type, // Use the current entity type from form
-        user_id: user.id
-        // Note: business_entities table doesn't have company_id column
-        // Entities are filtered by user_id instead
-      };
+      if (formData.entity_type === 'supplier') {
+        if (!selectedCompany?.company_name) {
+          toast({
+            title: "Validation Error",
+            description: "Please select a company before adding a supplier",
+            variant: "destructive",
+          });
+          return;
+        }
 
-      const { data, error } = await supabase
-        .from('business_entities')
-        .insert([entityData])
-        .select()
-        .single();
+        const { data, error } = await (supabase as any)
+          .from('suppliers')
+          .insert([{
+            company_name: newEntityData.name,
+            contact_person: newEntityData.contact_person || null,
+            phone: newEntityData.phone || null,
+            email: newEntityData.email || null,
+            address: newEntityData.address || null,
+            gstin: newEntityData.gstin || null,
+            user_id: user.id,
+            company_id: selectedCompany.company_name,
+          }])
+          .select('id, company_name')
+          .single();
 
-      if (error) throw error;
-      
-      // Add the new entity to the list immediately to avoid waiting for refetch
-      setBusinessEntities(prev => [...prev, data]);
-      
-      setFormData(prev => ({ 
-        ...prev, 
-        entity_id: data.id,
-        entity_type: data.entity_type 
-      }));
+        if (error) throw error;
+
+        setSuppliers((prev) => [...prev, data]);
+        setFormData((prev) => ({
+          ...prev,
+          entity_id: data.id,
+          entity_type: 'supplier',
+        }));
+      } else {
+        const entityData = {
+          ...newEntityData,
+          entity_type: formData.entity_type,
+          user_id: user.id,
+        };
+
+        const { data, error } = await supabase
+          .from('business_entities')
+          .insert([entityData])
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        setBusinessEntities((prev) => [...prev, data]);
+        setFormData((prev) => ({
+          ...prev,
+          entity_id: data.id,
+          entity_type: data.entity_type,
+        }));
+        await fetchBusinessEntities();
+      }
+
       setShowNewEntityForm(false);
       setNewEntityData({
         name: "",
-        entity_type: formData.entity_type, // Preserve the current entity type
+        entity_type: formData.entity_type,
         contact_person: "",
         phone: "",
         email: "",
         address: "",
         gstin: ""
       });
-      
-      // Also refetch to ensure consistency
-      await fetchBusinessEntities();
-      
-      toast({ title: "Success", description: "New entity created successfully" });
+
+      toast({
+        title: "Success",
+        description:
+          formData.entity_type === 'supplier'
+            ? "Supplier added successfully"
+            : "New entity created successfully",
+      });
     } catch (error) {
       logger.error('Failed to create entity:', error);
       toast({
@@ -858,7 +1001,22 @@ export const InvoiceManager = () => {
         return;
       }
 
-      // Resolve PO link for reference only — inventory updates on purchase invoice, not PO
+      const stockError = await validateStockAvailability(
+        validLineItems,
+        formData.invoice_type,
+        formData.entity_type,
+        selectedCompany.company_name
+      );
+      if (stockError) {
+        toast({
+          title: "Insufficient Stock",
+          description: stockError,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Resolve PO link for reference only — stock updates on PO receipt when PO is selected
       const linkedPurchaseOrderId =
         formData.invoice_type === 'purchase'
           ? await resolvePurchaseOrderIdForInvoice({
@@ -879,6 +1037,10 @@ export const InvoiceManager = () => {
           custom_invoice_number: formData.custom_invoice_number || null,
           entity_id: formData.entity_id || null,
           entity_type: formData.entity_type,
+          supplier_id:
+            formData.entity_type === 'supplier' && formData.entity_id
+              ? formData.entity_id
+              : null,
           invoice_type: formData.invoice_type,
           payment_status: formData.payment_status,
           invoice_date: formData.invoice_date,
@@ -887,6 +1049,12 @@ export const InvoiceManager = () => {
           tax_amount: totals.taxAmount,
           total_amount: totals.total,
           notes: formData.notes || null,
+          discount_amount: formData.discount_amount || 0,
+          discount_percentage: formData.discount_percentage || 0,
+          additional_charges_after_gst: totals.additionalChargesAfterGst || 0,
+          additional_charges_label: showAdditionalChargesFields
+            ? formData.additional_charges_label?.trim() || null
+            : null,
           user_id: user.id,
           company_id: selectedCompany.company_name,
           purchase_order_id: linkedPurchaseOrderId,
@@ -910,6 +1078,10 @@ export const InvoiceManager = () => {
                 custom_invoice_number: formData.custom_invoice_number || null,
                 entity_id: formData.entity_id || null,
                 entity_type: formData.entity_type,
+                supplier_id:
+                  formData.entity_type === 'supplier' && formData.entity_id
+                    ? formData.entity_id
+                    : null,
                 invoice_type: formData.invoice_type,
                 payment_status: formData.payment_status,
                 invoice_date: formData.invoice_date,
@@ -919,6 +1091,10 @@ export const InvoiceManager = () => {
                 total_amount: totals.total,
                 discount_amount: formData.discount_amount || 0,
                 discount_percentage: formData.discount_percentage || 0,
+                additional_charges_after_gst: totals.additionalChargesAfterGst || 0,
+                additional_charges_label: showAdditionalChargesFields
+                  ? formData.additional_charges_label?.trim() || null
+                  : null,
                 notes: formData.notes || null,
                 user_id: user.id,
                 company_id: selectedCompany.company_name,
@@ -1010,6 +1186,7 @@ export const InvoiceManager = () => {
               cgst: totals.cgst,
               sgst: totals.sgst,
               igst: totals.igst,
+              additionalChargesAfterGst: totals.additionalChargesAfterGst,
               total: totals.total,
             },
             mapping,
@@ -1040,7 +1217,12 @@ export const InvoiceManager = () => {
         ((formData.entity_type === 'supplier' || formData.entity_type === 'wholesaler') &&
           (formData.invoice_type === 'purchase' || formData.invoice_type === 'purchase_return'));
 
-      if (shouldUpdateInventory) {
+      const skipPurchaseStockFromPo = shouldSkipPurchaseInvoiceStockUpdate(
+        formData.invoice_type,
+        selectedPO
+      );
+
+      if (shouldUpdateInventory && !(formData.invoice_type === 'purchase' && skipPurchaseStockFromPo)) {
         for (const item of validLineItems) {
           try {
             let productId: string | undefined = item.product_id;
@@ -1152,13 +1334,18 @@ export const InvoiceManager = () => {
             description: `Successfully updated inventory for ${inventoryUpdatesSuccess} item(s)${inventoryUpdatesFailed > 0 ? `. ${inventoryUpdatesFailed} failed.` : '.'}`,
           });
         }
+      } else if (skipPurchaseStockFromPo) {
+        toast({
+          title: "Purchase Invoice Saved",
+          description: "Stock was not changed. Confirm receipt on the PO to update inventory.",
+        });
       } else {
         // For non-inventory invoices (transport, wholesale, labour, other), skip inventory updates
       }
 
       // Keep Stock-in-Hand ledger aligned with valued inventory
       try {
-        if (user && selectedCompany?.company_name) {
+        if (user && selectedCompany?.company_name && !(skipPurchaseStockFromPo && formData.invoice_type === 'purchase')) {
           let stockMapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
           stockMapping = await ensureDefaultChartOfAccounts(
             user.id,
@@ -1180,6 +1367,8 @@ export const InvoiceManager = () => {
 
       // Create GST entry for all invoice types (including sale_return and purchase_return)
       // Return invoices create negative GST entries that reduce output/input tax liability
+      // Skip when tax-inclusive — prices already include tax and no GST is added
+      if (!taxInclusive) {
       try {
         // Get entity details for GST calculation
         const entityDetails = await GSTSyncService.getEntityDetails(
@@ -1244,6 +1433,12 @@ export const InvoiceManager = () => {
           title: "Warning", 
           description: "Invoice created but GST entry failed",
           variant: "destructive"
+        });
+      }
+      } else {
+        toast({
+          title: "Success",
+          description: "Tax-inclusive invoice created successfully (no GST added)",
         });
       }
       
@@ -1793,7 +1988,9 @@ export const InvoiceManager = () => {
       due_date: "",
       notes: "",
       discount_amount: 0,
-      discount_percentage: 0
+      discount_percentage: 0,
+      additional_charges_after_gst: 0,
+      additional_charges_label: "Freight / Courier / Packaging",
     });
     setLineItems([{
       product_id: undefined,
@@ -1805,9 +2002,11 @@ export const InvoiceManager = () => {
     }]);
     setForceIGST(false);
     setApplyTaxOnSubtotal(false);
+    setTaxInclusive(false);
     setSubtotalTaxRate(18);
     setShowNewEntityForm(false);
     setShowDiscountFields(false);
+    setShowAdditionalChargesFields(false);
     setSelectedPO("");
     setPOItems([]);
     setOpen(false);
@@ -1819,7 +2018,7 @@ export const InvoiceManager = () => {
       description: "",
       quantity: 1,
       unit_price: 0,
-      gst_rate: 18,
+      gst_rate: getDefaultGstRate(),
       max_quantity: undefined
     }]);
   };
@@ -1844,6 +2043,106 @@ export const InvoiceManager = () => {
     const updated = [...lineItems];
     updated[index] = { ...updated[index], [field]: value };
     setLineItems(updated);
+  };
+
+  const getDefaultGstRate = (productId?: string) => {
+    if (taxInclusive) return 0;
+    if (productId) {
+      const product = products.find((p) => p.id === productId);
+      return product?.gst_rate ?? 18;
+    }
+    return 18;
+  };
+
+  const handleTaxInclusiveChange = (checked: boolean) => {
+    setTaxInclusive(checked);
+    if (checked) {
+      setApplyTaxOnSubtotal(false);
+      setForceIGST(false);
+      setLineItems((prev) => prev.map((item) => ({ ...item, gst_rate: 0 })));
+      return;
+    }
+    setLineItems((prev) =>
+      prev.map((item) => {
+        if (item.product_id) {
+          const product = products.find((p) => p.id === item.product_id);
+          return { ...item, gst_rate: product?.gst_rate ?? 18 };
+        }
+        return { ...item, gst_rate: 18 };
+      })
+    );
+  };
+
+  const getStockLimitForLineItem = (index: number): number | undefined => {
+    if (!invoiceReducesStock(formData.invoice_type, formData.entity_type)) {
+      return undefined;
+    }
+    const item = lineItems[index];
+    const productId = resolveLineItemProductId(item, products);
+    if (!productId) return undefined;
+
+    const product = products.find((p) => p.id === productId);
+    const stock = product?.current_stock ?? 0;
+    const usedOnOtherLines = lineItems.reduce((sum, lineItem, lineIndex) => {
+      if (lineIndex === index) return sum;
+      const lineProductId = resolveLineItemProductId(lineItem, products);
+      if (lineProductId === productId) return sum + (lineItem.quantity || 0);
+      return sum;
+    }, 0);
+
+    return Math.max(0, stock - usedOnOtherLines);
+  };
+
+  const validateStockAvailability = async (
+    items: Array<{
+      product_id?: string;
+      description: string;
+      quantity: number;
+    }>,
+    invoiceType: string,
+    entityType: string,
+    companyName?: string
+  ): Promise<string | null> => {
+    if (!invoiceReducesStock(invoiceType, entityType)) return null;
+
+    const qtyByProduct = new Map<string, { name: string; qty: number }>();
+    for (const item of items) {
+      if (!item.description?.trim() || item.quantity <= 0) continue;
+
+      const productId = resolveLineItemProductId(item, products);
+      if (!productId) continue;
+
+      const product = products.find((p) => p.id === productId);
+      const productName = product?.name || item.description;
+      const existing = qtyByProduct.get(productId);
+      if (existing) {
+        existing.qty += item.quantity;
+      } else {
+        qtyByProduct.set(productId, { name: productName, qty: item.quantity });
+      }
+    }
+
+    if (qtyByProduct.size === 0) return null;
+
+    for (const [productId, { name, qty }] of qtyByProduct) {
+      let query: any = supabase
+        .from('products')
+        .select('current_stock, name')
+        .eq('id', productId);
+      if (companyName) {
+        query = query.eq('company_id', companyName);
+      }
+
+      const { data, error } = await query.single();
+      if (error || !data) {
+        return `Could not verify stock for "${name}". Please refresh and try again.`;
+      }
+      if (qty > data.current_stock) {
+        return `"${data.name || name}" has only ${data.current_stock} in stock, but ${qty} requested.`;
+      }
+    }
+
+    return null;
   };
 
   // Check if description matches any product
@@ -1895,8 +2194,12 @@ export const InvoiceManager = () => {
       const productData = {
         name: productName,
         description: pendingProductItem.description,
-        selling_price: pendingProductItem.unit_price || null,
-        purchase_price: null,
+        selling_price: isPurchaseSideInvoice(formData.invoice_type)
+          ? null
+          : pendingProductItem.unit_price || null,
+        purchase_price: isPurchaseSideInvoice(formData.invoice_type)
+          ? pendingProductItem.unit_price || null
+          : null,
         gst_rate: pendingProductItem.gst_rate || 18,
         current_stock: 0,
         min_stock_level: 0,
@@ -1984,7 +2287,9 @@ export const InvoiceManager = () => {
               due_date: "",
               notes: "",
               discount_amount: 0,
-              discount_percentage: 0
+              discount_percentage: 0,
+              additional_charges_after_gst: 0,
+              additional_charges_label: "Freight / Courier / Packaging",
             });
             setLineItems([{
               product_id: undefined,
@@ -1999,6 +2304,7 @@ export const InvoiceManager = () => {
             setSubtotalTaxRate(18);
             setShowNewEntityForm(false);
             setShowDiscountFields(false);
+            setShowAdditionalChargesFields(false);
             setSelectedPO("");
             setPOItems([]);
             setSelectedOriginalInvoice("");
@@ -2042,6 +2348,9 @@ export const InvoiceManager = () => {
                     setSelectedPO("");
                     setPOItems([]);
                     setSelectedOriginalInvoice("");
+                    setTaxInclusive(false);
+                    setApplyTaxOnSubtotal(false);
+                    setForceIGST(false);
                     setLineItems([{
                       product_id: undefined,
                       description: "",
@@ -2102,6 +2411,9 @@ export const InvoiceManager = () => {
                       setSelectedPO("");
                       setPOItems([]);
                     }
+                    if (value === 'supplier') {
+                      fetchSuppliers();
+                    }
                     setFormData(prev => ({ ...prev, entity_type: value, entity_id: "" }));
                   }}>
                     <SelectTrigger>
@@ -2119,7 +2431,34 @@ export const InvoiceManager = () => {
                 </div>
               </div>
 
+              {isStandardSalesOrPurchaseInvoice(formData.invoice_type) && (
+                <div className="flex items-center justify-between p-3 border rounded-md bg-muted/50">
+                  <div>
+                    <Label htmlFor="tax-inclusive">Tax Pricing</Label>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {taxInclusive
+                        ? 'Inclusive — unit prices already include tax; no GST is added'
+                        : 'Exclusive — GST is calculated and added on top of line totals'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-sm ${!taxInclusive ? 'font-medium' : 'text-muted-foreground'}`}>
+                      Exclusive
+                    </span>
+                    <Switch
+                      id="tax-inclusive"
+                      checked={taxInclusive}
+                      onCheckedChange={handleTaxInclusiveChange}
+                    />
+                    <span className={`text-sm ${taxInclusive ? 'font-medium' : 'text-muted-foreground'}`}>
+                      Inclusive
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* IGST Override Option */}
+              {!taxInclusive && (
               <div className="flex items-center space-x-2 p-3 border rounded-md bg-muted/50">
                 <input
                   type="checkbox"
@@ -2132,9 +2471,15 @@ export const InvoiceManager = () => {
                   Force IGST (Apply full tax % as IGST regardless of state)
                 </Label>
               </div>
+              )}
 
               <div>
-                <Label>Business Entity {formData.entity_type === 'customer' ? '*' : '(Optional)'}</Label>
+                <Label>
+                  {formData.entity_type === 'supplier'
+                    ? 'Supplier'
+                    : 'Business Entity'}{' '}
+                  {formData.entity_type === 'customer' ? '*' : '(Optional)'}
+                </Label>
                 <div className="flex gap-2">
                   <Select value={formData.entity_id || "open-items"} onValueChange={(value) => {
                     if (value === "open-items") {
@@ -2163,24 +2508,19 @@ export const InvoiceManager = () => {
                           </span>
                         </SelectItem>
                       )}
-                      {businessEntities.length === 0 ? (
-                        <SelectItem value="no-entities" disabled>
-                          No entities found. Click + to add one.
-                        </SelectItem>
-                      ) : businessEntities
-                        .filter(entity => entity.entity_type === formData.entity_type)
-                        .length === 0 ? (
+                      {entityOptionsForType(formData.entity_type).length === 0 ? (
                         <SelectItem value="no-entities-type" disabled>
-                          No {formData.entity_type}s found. Click + to add one.
+                          No {formData.entity_type}s found.
+                          {formData.entity_type === 'supplier'
+                            ? ' Add one in Suppliers or click +.'
+                            : ' Click + to add one.'}
                         </SelectItem>
                       ) : (
-                        businessEntities
-                          .filter(entity => entity.entity_type === formData.entity_type)
-                          .map((entity) => (
-                            <SelectItem key={entity.id} value={entity.id}>
-                              {entity.name} ({entity.entity_type})
-                            </SelectItem>
-                          ))
+                        entityOptionsForType(formData.entity_type).map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
+                            {option.label} ({option.sublabel})
+                          </SelectItem>
+                        ))
                       )}
                     </SelectContent>
                   </Select>
@@ -2291,29 +2631,11 @@ export const InvoiceManager = () => {
                         await loadPOItems(value);
                         const po = purchaseOrders.find(p => p.id === value);
                         if (po && po.supplier_id) {
-                          // Try to find matching business entity with supplier type
-                          const matchingEntity = businessEntities.find(
-                            e => e.entity_type === 'supplier' && e.id === po.supplier_id
-                          );
-                          if (matchingEntity) {
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              entity_type: 'supplier',
-                              entity_id: matchingEntity.id
-                            }));
-                          } else {
-                            // Set entity type to supplier, but let user select the entity
-                            // since supplier_id might not match entity_id
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              entity_type: 'supplier',
-                              entity_id: ""
-                            }));
-                            toast({
-                              title: "Info",
-                              description: "Please select the supplier from the Business Entity dropdown",
-                            });
-                          }
+                          setFormData((prev) => ({
+                            ...prev,
+                            entity_type: 'supplier',
+                            entity_id: po.supplier_id,
+                          }));
                         }
                       } else {
                         setPOItems([]);
@@ -2366,7 +2688,7 @@ export const InvoiceManager = () => {
                     <p className="text-xs text-muted-foreground mt-1">
                       {formData.invoice_type === 'purchase_return' 
                         ? 'Selected PO items will be populated for return/refund'
-                        : 'Selected PO items will be populated for invoice creation'}
+                        : 'Selected PO items will be populated for invoice creation. Stock updates when you confirm receipt on the PO, not on invoice save.'}
                     </p>
                   )}
                 </div>
@@ -2519,44 +2841,36 @@ export const InvoiceManager = () => {
                                 updated[index].description = '';
                               }
                               updated[index].unit_price = 0;
-                              updated[index].gst_rate = 18;
+                              updated[index].gst_rate = taxInclusive ? 0 : 18;
                               setLineItems(updated);
                               return;
                             }
                             
                             const product = products.find(p => p.id === value);
                             if (product) {
-                              // Calculate selling price - handle null, undefined, and ensure it's a number
-                              let sellingPrice = 0;
-                              if (product.selling_price != null) {
-                                const priceValue = product.selling_price;
-                                if (typeof priceValue === 'number') {
-                                  sellingPrice = priceValue;
-                                } else if (typeof priceValue === 'string') {
-                                  sellingPrice = parseFloat(priceValue) || 0;
-                                } else {
-                                  sellingPrice = Number(priceValue) || 0;
-                                }
-                              }
-                              
+                              const defaultPrice = getProductDefaultUnitPrice(
+                                product,
+                                formData.invoice_type
+                              );
+
                               // Update all fields in one operation to avoid multiple state updates
                               const updated = [...lineItems];
                               const currentItem = { ...updated[index] }; // Copy current item
-                              
+
                               // Store product_id
                               updated[index].product_id = value;
-                              
+
                               // Auto-fill description if it's empty or matches previous product
                               const previousProduct = currentItem.product_id ? products.find(p => p.id === currentItem.product_id) : null;
                               const wasAutoFilled = previousProduct && currentItem.description === previousProduct.name;
-                              
+
                               if (!currentItem.description || currentItem.description.trim() === '' || wasAutoFilled) {
                                 updated[index].description = product.name;
                               }
-                              
-                              // Auto-fill price and GST rate - always set these
-                              updated[index].unit_price = sellingPrice;
-                              updated[index].gst_rate = product.gst_rate || 18;
+
+                              // Auto-fill price and GST rate - purchase uses cost, sales uses selling price
+                              updated[index].unit_price = defaultPrice;
+                              updated[index].gst_rate = taxInclusive ? 0 : (product.gst_rate || 18);
                               
                               // Force state update by creating a new array reference
                               setLineItems(updated);
@@ -2593,7 +2907,10 @@ export const InvoiceManager = () => {
                                 const desc = p.description?.toLowerCase() || '';
                                 const sku = p.sku?.toLowerCase() || '';
                                 const stock = String(p.current_stock || 0);
-                                const price = p.selling_price ? String(p.selling_price) : '';
+                                const listPrice = isPurchaseSideInvoice(formData.invoice_type)
+                                  ? p.purchase_price ?? p.selling_price
+                                  : p.selling_price ?? p.purchase_price;
+                                const price = listPrice ? String(listPrice) : '';
                                 const hsn = p.hsn_code?.toLowerCase() || '';
                                 return name.includes(searchTerm) || 
                                        desc.includes(searchTerm) ||
@@ -2620,12 +2937,18 @@ export const InvoiceManager = () => {
                               );
                             }
                             
-                            return filteredProducts.map((product) => (
+                            return filteredProducts.map((product) => {
+                              const listPrice = getProductDefaultUnitPrice(
+                                product,
+                                formData.invoice_type
+                              );
+                              return (
                               <SelectItem key={product.id} value={product.id}>
                                 {product.name} {(product.current_stock !== undefined) ? ` (Stock: ${product.current_stock})` : ''} 
-                                {product.selling_price ? ` - ₹${product.selling_price.toFixed(2)}` : ''}
+                                {listPrice > 0 ? ` - ₹${listPrice.toFixed(2)}` : ''}
                               </SelectItem>
-                            ));
+                            );
+                            });
                           })()}
                         </SelectContent>
                         </Select>
@@ -2658,10 +2981,19 @@ export const InvoiceManager = () => {
                       )}
                     </div>
                     <div className="col-span-2">
+                      {(() => {
+                        const stockLimit = getStockLimitForLineItem(index);
+                        const exceedsStock =
+                          stockLimit !== undefined && item.quantity > stockLimit;
+                        return (
+                          <>
                       <Label htmlFor={`quantity-${index}`} className="text-sm mb-1 block">
                         Quantity
                         {(formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return') && item.max_quantity && (
                           <span className="text-xs text-muted-foreground ml-1">(Max: {item.max_quantity})</span>
+                        )}
+                        {stockLimit !== undefined && (
+                          <span className="text-xs text-muted-foreground ml-1">(Stock: {stockLimit})</span>
                         )}
                       </Label>
                       <Input
@@ -2671,25 +3003,40 @@ export const InvoiceManager = () => {
                         value={item.quantity}
                         onChange={(e) => {
                           let qty = parseFloat(e.target.value) || 0;
-                          // For return invoices, enforce max quantity
                           if ((formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return') && item.max_quantity) {
                             qty = Math.min(qty, item.max_quantity);
+                          }
+                          if (stockLimit !== undefined) {
+                            qty = Math.min(qty, stockLimit);
                           }
                           updateLineItem(index, 'quantity', qty);
                         }}
                         min="0"
-                        max={item.max_quantity}
+                        max={item.max_quantity ?? stockLimit}
                         step="0.01"
                         required
+                        className={exceedsStock ? 'border-destructive' : ''}
                       />
                       {(formData.invoice_type === 'sale_return' || formData.invoice_type === 'purchase_return') && item.max_quantity && (
                         <p className="text-xs text-muted-foreground mt-1">
                           Original quantity: {item.max_quantity}. Set to 0 to skip this item.
                         </p>
                       )}
+                      {exceedsStock && (
+                        <p className="text-xs text-destructive mt-1">
+                          Only {stockLimit} available in stock
+                        </p>
+                      )}
+                          </>
+                        );
+                      })()}
                     </div>
                     <div className="col-span-2">
-                      <Label htmlFor={`price-${index}`} className="text-sm mb-1 block">Unit Price</Label>
+                      <Label htmlFor={`price-${index}`} className="text-sm mb-1 block">
+                        {isPurchaseSideInvoice(formData.invoice_type)
+                          ? 'Purchase Rate'
+                          : 'Unit Price'}
+                      </Label>
                       <Input
                         id={`price-${index}`}
                         type="number"
@@ -2707,7 +3054,9 @@ export const InvoiceManager = () => {
                       />
                       {item.product_id && (() => {
                         const product = products.find(p => p.id === item.product_id);
-                        const defaultPrice = product?.selling_price || 0;
+                        const defaultPrice = product
+                          ? getProductDefaultUnitPrice(product, formData.invoice_type)
+                          : 0;
                         if (product && item.unit_price !== defaultPrice) {
                           return (
                             <p className="text-xs text-muted-foreground mt-1">
@@ -2728,16 +3077,26 @@ export const InvoiceManager = () => {
                       })()}
                     </div>
                     <div className="col-span-2">
-                      <Label htmlFor={`gst-${index}`} className="text-sm mb-1 block">GST %</Label>
+                      <Label htmlFor={`gst-${index}`} className="text-sm mb-1 block">
+                        GST %
+                        {taxInclusive && (
+                          <span className="text-xs text-muted-foreground ml-1">(Inclusive)</span>
+                        )}
+                      </Label>
                       <Input
                         id={`gst-${index}`}
                         type="number"
                         placeholder="GST %"
-                        value={item.gst_rate}
-                        onChange={(e) => updateLineItem(index, 'gst_rate', parseFloat(e.target.value) || 0)}
+                        value={taxInclusive ? 0 : item.gst_rate}
+                        onChange={(e) => {
+                          if (taxInclusive) return;
+                          updateLineItem(index, 'gst_rate', parseFloat(e.target.value) || 0);
+                        }}
                         min="0"
                         step="0.01"
                         required
+                        disabled={taxInclusive}
+                        className={taxInclusive ? 'bg-muted cursor-not-allowed' : ''}
                       />
                     </div>
                     <div className="col-span-1">
@@ -2754,6 +3113,7 @@ export const InvoiceManager = () => {
               </div>
 
               {/* Tax on Subtotal Option */}
+              {!taxInclusive && (
               <div className="flex items-center space-x-2 p-3 border rounded-md bg-muted/50">
                 <input
                   type="checkbox"
@@ -2783,6 +3143,7 @@ export const InvoiceManager = () => {
                   </div>
                 )}
               </div>
+              )}
 
               {/* Discount Fields */}
               <div className="border-t pt-4 mb-4">
@@ -2845,6 +3206,62 @@ export const InvoiceManager = () => {
                 )}
               </div>
 
+              <div className="border-t pt-4 mb-4">
+                <div className="flex items-center space-x-2 mb-4">
+                  <Switch
+                    id="enable-additional-charges"
+                    checked={showAdditionalChargesFields}
+                    onCheckedChange={(checked) => {
+                      setShowAdditionalChargesFields(checked);
+                      if (!checked) {
+                        setFormData((prev) => ({
+                          ...prev,
+                          additional_charges_after_gst: 0,
+                        }));
+                      }
+                    }}
+                  />
+                  <Label htmlFor="enable-additional-charges" className="font-normal cursor-pointer">
+                    Add freight / courier / packaging charges (after GST — no tax on these)
+                  </Label>
+                </div>
+                {showAdditionalChargesFields && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="additional-charges-label">Charge label</Label>
+                      <Input
+                        id="additional-charges-label"
+                        value={formData.additional_charges_label}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            additional_charges_label: e.target.value,
+                          }))
+                        }
+                        placeholder="Freight / Courier / Packaging"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="additional-charges-amount">Amount (₹)</Label>
+                      <Input
+                        id="additional-charges-amount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.additional_charges_after_gst || ''}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            additional_charges_after_gst: parseFloat(e.target.value) || 0,
+                          }))
+                        }
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="border-t pt-4">
                 <div className="flex justify-end space-y-2">
                   <div className="text-right">
@@ -2862,7 +3279,12 @@ export const InvoiceManager = () => {
                     {!calculateTotals().discountAmount && (
                       <p>Transaction Value (Taxable Value): {formatIndianCurrency(calculateTotals().subtotal)}</p>
                     )}
-                    {applyTaxOnSubtotal && (
+                    {taxInclusive && (
+                      <p className="text-sm text-muted-foreground">
+                        Tax-inclusive pricing — no GST added on top
+                      </p>
+                    )}
+                    {!taxInclusive && applyTaxOnSubtotal && (
                       <>
                         {calculateTotals().cgst > 0 && (
                           <p className="text-sm text-muted-foreground">
@@ -2885,7 +3307,7 @@ export const InvoiceManager = () => {
                         )}
                       </>
                     )}
-                    {!applyTaxOnSubtotal && (
+                    {!taxInclusive && !applyTaxOnSubtotal && (
                       <>
                         {calculateTotals().cgst > 0 && (
                           <p className="text-sm text-muted-foreground">
@@ -2907,6 +3329,12 @@ export const InvoiceManager = () => {
                           </p>
                         )}
                       </>
+                    )}
+                    {calculateTotals().additionalChargesAfterGst > 0 && (
+                      <p className="text-sm text-muted-foreground">
+                        Add: {formData.additional_charges_label || 'Additional charges'} (after GST):{' '}
+                        {formatIndianCurrency(calculateTotals().additionalChargesAfterGst)}
+                      </p>
                     )}
                     <p className="font-bold">Total Invoice Value: {formatIndianCurrency(calculateTotals().total)}</p>
                   </div>
@@ -3278,6 +3706,12 @@ export const InvoiceManager = () => {
                     </>
                   ) : (
                     <p>Add: Tax Amount: {formatIndianCurrency(selectedInvoice.tax_amount)}</p>
+                  )}
+                  {(selectedInvoice.additional_charges_after_gst || 0) > 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      Add: {selectedInvoice.additional_charges_label || 'Additional charges'} (after GST):{' '}
+                      {formatIndianCurrency(selectedInvoice.additional_charges_after_gst || 0)}
+                    </p>
                   )}
                   <p className="text-lg font-bold">Total Invoice Value: {formatIndianCurrency(selectedInvoice.total_amount)}</p>
                   {selectedInvoice.amount_due !== undefined && selectedInvoice.amount_due > 0 && (

@@ -165,6 +165,8 @@ export type Database = {
           original_invoice_id: string | null
           tax_amount: number
           total_amount: number
+          additional_charges_after_gst?: number | null
+          additional_charges_label?: string | null
           updated_at: string
           user_id: string | null
         }
@@ -186,6 +188,8 @@ export type Database = {
           original_invoice_id?: string | null
           tax_amount?: number
           total_amount?: number
+          additional_charges_after_gst?: number | null
+          additional_charges_label?: string | null
           updated_at?: string
           user_id?: string | null
         }
@@ -207,6 +211,8 @@ export type Database = {
           original_invoice_id?: string | null
           tax_amount?: number
           total_amount?: number
+          additional_charges_after_gst?: number | null
+          additional_charges_label?: string | null
           updated_at?: string
           user_id?: string | null
         }
