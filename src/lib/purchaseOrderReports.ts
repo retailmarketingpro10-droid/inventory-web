@@ -32,6 +32,8 @@ export interface PurchaseInvoiceReportRow {
   subtotal?: number | null;
   tax_amount?: number | null;
   total_amount?: number | null;
+  additional_charges_after_gst?: number | null;
+  additional_charges_label?: string | null;
   payment_status?: string | null;
   supplier_id?: string | null;
   purchase_order_id?: string | null;
@@ -166,6 +168,8 @@ export function mapPurchaseInvoicesToReportRows(invoices: PurchaseInvoiceReportR
     supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'Miscellaneous',
     subtotal: inv.subtotal || 0,
     tax_amount: inv.tax_amount || 0,
+    additional_charges: Number(inv.additional_charges_after_gst) || 0,
+    additional_charges_label: inv.additional_charges_label || 'Freight / Courier / Packaging',
     payment_status: inv.payment_status || 'due',
     record_type: 'Purchase Invoice' as const,
     counts_toward_total: true,
@@ -184,6 +188,8 @@ export function mapPurchaseReturnsToReportRows(invoices: PurchaseInvoiceReportRo
     supplier: inv.suppliers?.company_name || inv.business_entities?.name || 'Miscellaneous',
     subtotal: inv.subtotal || 0,
     tax_amount: inv.tax_amount || 0,
+    additional_charges: Number(inv.additional_charges_after_gst) || 0,
+    additional_charges_label: inv.additional_charges_label || 'Freight / Courier / Packaging',
     payment_status: inv.payment_status || 'due',
     record_type: 'Purchase Return' as const,
     counts_toward_total: true,
@@ -223,9 +229,19 @@ export function buildPurchaseReportSummary(params: {
     0
   );
 
+  const totalFreight = purchaseInvoices.reduce(
+    (sum, inv) => sum + (Number(inv.additional_charges_after_gst) || 0),
+    0
+  );
+  const totalReturnFreight = purchaseReturns.reduce(
+    (sum, inv) => sum + (Number(inv.additional_charges_after_gst) || 0),
+    0
+  );
+
   const netPurchase = invoiceSubtotal - totalPurchaseReturns;
   const netTax = invoiceTax - totalReturnTax;
   const netAmount = invoiceTotal - totalReturnAmount;
+  const netFreight = totalFreight - totalReturnFreight;
 
   return {
     totalSales: 0,
@@ -237,6 +253,9 @@ export function buildPurchaseReportSummary(params: {
     totalTax: invoiceTax,
     totalReturnTax,
     netPurchaseTax: netTax,
+    totalFreight,
+    totalReturnFreight,
+    netFreight,
   };
 }
 

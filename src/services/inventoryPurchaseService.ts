@@ -23,7 +23,7 @@ export function shouldSkipPurchaseInvoiceStockUpdate(
 }
 
 /**
- * Increase product stock when goods are received against a purchase order.
+ * Increase product stock (used when a PO is created or goods are received).
  */
 export async function applyPoReceiptStockUpdates(params: {
   items: PoReceiptStockItem[];

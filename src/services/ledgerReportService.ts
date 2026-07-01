@@ -72,6 +72,8 @@ function mappingLedgerIds(mapping: LedgerMappingSettings): string[] {
   add(mapping.discountAllowedAccountId);
   add(mapping.discountReceivedAccountId);
   add(mapping.stockInHandAccountId);
+  add(mapping.freightInwardAccountId);
+  add(mapping.freightOutwardAccountId);
   add(mapping.capitalAccountId);
   (mapping.directExpenseAccountIds || []).forEach(add);
   (mapping.indirectExpenseAccountIds || []).forEach(add);
@@ -345,11 +347,20 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
   const directExpenseSet = new Set([
     ...directExpenseIds,
     ...(mapping.purchaseAccountId ? [mapping.purchaseAccountId] : []),
+    ...(mapping.freightInwardAccountId ? [mapping.freightInwardAccountId] : []),
   ]);
   const directExpenses = Math.max(
     0,
     netExpense(sumMovementForIds(periodMap, directExpenseIds))
   );
+  const freightInward = mapping.freightInwardAccountId
+    ? Math.max(
+        0,
+        netExpense(
+          periodMap.get(mapping.freightInwardAccountId) || { debits: 0, credits: 0 }
+        )
+      )
+    : 0;
 
   const autoIndirectExpenseIds = ledgers
     .filter((l) => {
@@ -408,12 +419,12 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
   }
 
   // When there are no sales, purchases add to stock — closing must be opening + purchases.
-  const impliedClosingStock = openingStock + netPurchases + directExpenses;
+  const impliedClosingStock = openingStock + netPurchases + directExpenses + freightInward;
   if (netSales === 0 && impliedClosingStock > closingStock + 0.01) {
     closingStock = impliedClosingStock;
   }
 
-  const cogs = openingStock + netPurchases + directExpenses - closingStock;
+  const cogs = openingStock + netPurchases + directExpenses + freightInward - closingStock;
   const grossProfit = netSales - cogs;
   const netProfit = grossProfit - indirectExpenses + indirectIncome;
 
@@ -424,6 +435,7 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
     { subcategory: 'Sales Account', amount: netSales, category: 'Revenue' },
     { subcategory: 'Opening Stock', amount: openingStock, category: 'Cost of Goods Sold' },
     { subcategory: 'Purchase Account', amount: netPurchases, category: 'Cost of Goods Sold' },
+    { subcategory: 'Freight Inward', amount: freightInward, category: 'Cost of Goods Sold' },
     { subcategory: 'Direct Expenses', amount: directExpenses, category: 'Cost of Goods Sold' },
     { subcategory: 'Less: Closing Stock', amount: closingStock, category: 'Cost of Goods Sold' },
     { subcategory: 'Cost of Goods Sold', amount: cogs, category: 'Cost of Goods Sold' },
@@ -444,6 +456,7 @@ export async function generateProfitAndLossFromLedger(params: LedgerReportParams
       closingStock,
       cogs,
       directExpenses,
+      freightInward,
       indirectExpenses,
       indirectIncome,
     },

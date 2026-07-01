@@ -503,10 +503,47 @@ export const PurchaseOrderManager = () => {
         throw itemsError;
       }
 
-      // Do not change inventory on PO creation; update happens on receiving
+      const stockResult = await applyPoReceiptStockUpdates({
+        companyId: selectedCompany?.company_name,
+        items: lineItems
+          .filter((item) => item.product_id && item.quantity > 0)
+          .map((item) => ({
+            product_id: item.product_id,
+            receiveQty: item.quantity,
+            description: item.description,
+          })),
+      });
 
-      // Show success message immediately
-      toast({ title: "Success", description: "Purchase order created successfully" });
+      if (stockResult.failed > 0) {
+        stockResult.messages.forEach((message) => logger.warn('PO create stock:', message));
+      }
+
+      try {
+        if (user && selectedCompany?.company_name && stockResult.updated > 0) {
+          let stockMapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
+          stockMapping = await ensureDefaultChartOfAccounts(
+            user.id,
+            selectedCompany.company_name,
+            stockMapping
+          );
+          await reconcileStockInHandLedger({
+            companyId: selectedCompany.company_name,
+            userId: user.id,
+            mapping: stockMapping,
+            asOfDate: formData.order_date || new Date().toISOString().split('T')[0],
+            reference: poNumber,
+          });
+        }
+      } catch (stockLedgerError) {
+        logger.error('Stock-in-Hand sync after PO create failed (non-blocking):', stockLedgerError);
+      }
+
+      toast({
+        title: "Success",
+        description: stockResult.updated > 0
+          ? `Purchase order created. Stock updated for ${stockResult.updated} product(s).`
+          : "Purchase order created successfully",
+      });
       resetForm();
       fetchPurchaseOrders();
 
@@ -721,40 +758,6 @@ export const PurchaseOrderManager = () => {
         if (itemError) throw itemError;
       }
 
-      const stockResult = await applyPoReceiptStockUpdates({
-        companyId: selectedCompany?.company_name,
-        items: itemsToReceive.map((item) => ({
-          product_id: item.product_id,
-          receiveQty: receivingItems[item.id] || 0,
-          description: item.description,
-        })),
-      });
-
-      if (stockResult.failed > 0) {
-        stockResult.messages.forEach((message) => logger.warn('PO receipt stock:', message));
-      }
-
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user && selectedCompany?.company_name && stockResult.updated > 0) {
-          let stockMapping = await getLedgerMappingSettings(user.id, selectedCompany.company_name);
-          stockMapping = await ensureDefaultChartOfAccounts(
-            user.id,
-            selectedCompany.company_name,
-            stockMapping
-          );
-          await reconcileStockInHandLedger({
-            companyId: selectedCompany.company_name,
-            userId: user.id,
-            mapping: stockMapping,
-            asOfDate: new Date().toISOString().split('T')[0],
-            reference: selectedPO.po_number,
-          });
-        }
-      } catch (stockLedgerError) {
-        logger.error('Stock-in-Hand sync after PO receipt failed (non-blocking):', stockLedgerError);
-      }
-
       const updatedItems = poItems.map((item) => ({
         ...item,
         received_quantity: (item.received_quantity || 0) + (receivingItems[item.id] || 0),
@@ -783,13 +786,9 @@ export const PurchaseOrderManager = () => {
 
       toast({
         title: "Success",
-        description: stockResult.updated > 0
-          ? allFullyReceived
-            ? `Purchase order fully received. Stock updated for ${stockResult.updated} product(s).`
-            : `Partial receipt recorded. Stock updated for ${stockResult.updated} product(s).`
-          : allFullyReceived
-            ? "Purchase order fully received."
-            : "Partial receipt recorded.",
+        description: allFullyReceived
+          ? "Purchase order fully received (stock was updated when PO was created)."
+          : "Partial receipt recorded (stock was updated when PO was created).",
       });
 
       fetchPurchaseOrders();

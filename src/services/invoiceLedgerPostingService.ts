@@ -117,6 +117,23 @@ function addInputTaxDebits(
   }
 }
 
+function goodsBaseAmount(taxable: number, discount: number): number {
+  return round2(taxable + discount);
+}
+
+function resolveFreightLedgerId(
+  mapping: LedgerMappingSettings,
+  invoiceType: string
+): string | undefined {
+  if (invoiceType === 'purchase' || invoiceType === 'purchase_return') {
+    return mapping.freightInwardAccountId;
+  }
+  if (invoiceType === 'sales' || invoiceType === 'sale_return') {
+    return mapping.freightOutwardAccountId;
+  }
+  return undefined;
+}
+
 function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostingLine[] {
   const { invoiceType, paymentStatus, paymentMethod, totals, mapping } = params;
   const lines: LedgerPostingLine[] = [];
@@ -124,7 +141,9 @@ function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostin
   const discount = round2(totals.discountAmount);
   const additional = round2(totals.additionalChargesAfterGst || 0);
   const total = round2(totals.total);
-  const salesOrPurchaseBase = taxable + discount + additional;
+  const goodsBase = goodsBaseAmount(taxable, discount);
+  const freightLedgerId = resolveFreightLedgerId(mapping, invoiceType);
+  const bundledGoods = goodsBase + (freightLedgerId ? 0 : additional);
 
   const partyStatus = partyEntryStatus(paymentStatus);
 
@@ -137,14 +156,20 @@ function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostin
     if (discount > 0 && mapping.discountAllowedAccountId) {
       lines.push(line(mapping.discountAllowedAccountId, discount, 'debit', BOOKED));
     }
-    lines.push(line(salesId, salesOrPurchaseBase, 'credit', BOOKED));
+    lines.push(line(salesId, bundledGoods, 'credit', BOOKED));
+    if (additional > 0 && freightLedgerId) {
+      lines.push(line(freightLedgerId, additional, 'credit', BOOKED));
+    }
     addOutputTaxCredits(lines, mapping, totals.cgst, totals.sgst, totals.igst);
   } else if (invoiceType === 'sale_return') {
     const partyId = pickPartyLedger(mapping, paymentStatus, paymentMethod, 'sales');
     const salesId = mapping.salesAccountId;
     if (!partyId || !salesId) return lines;
 
-    lines.push(line(salesId, salesOrPurchaseBase, 'debit', BOOKED));
+    lines.push(line(salesId, bundledGoods, 'debit', BOOKED));
+    if (additional > 0 && freightLedgerId) {
+      lines.push(line(freightLedgerId, additional, 'debit', BOOKED));
+    }
     for (const [amount, ledgerId] of [
       [totals.cgst, mapping.outputCgstAccountId],
       [totals.sgst, mapping.outputSgstAccountId],
@@ -160,7 +185,10 @@ function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostin
     const purchaseId = mapping.purchaseAccountId;
     if (!partyId || !purchaseId) return lines;
 
-    lines.push(line(purchaseId, salesOrPurchaseBase, 'debit', BOOKED));
+    lines.push(line(purchaseId, bundledGoods, 'debit', BOOKED));
+    if (additional > 0 && freightLedgerId) {
+      lines.push(line(freightLedgerId, additional, 'debit', BOOKED));
+    }
     addInputTaxDebits(lines, mapping, totals.cgst, totals.sgst, totals.igst);
     if (discount > 0 && mapping.discountReceivedAccountId) {
       lines.push(line(mapping.discountReceivedAccountId, discount, 'credit', BOOKED));
@@ -181,7 +209,10 @@ function buildInvoiceVoucherLines(params: PostInvoiceLedgerParams): LedgerPostin
         lines.push(line(ledgerId, amount, 'credit', BOOKED));
       }
     }
-    lines.push(line(purchaseId, salesOrPurchaseBase, 'credit', BOOKED));
+    lines.push(line(purchaseId, bundledGoods, 'credit', BOOKED));
+    if (additional > 0 && freightLedgerId) {
+      lines.push(line(freightLedgerId, additional, 'credit', BOOKED));
+    }
   }
 
   return lines.filter((l) => l.amount > 0);

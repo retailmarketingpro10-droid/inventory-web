@@ -111,6 +111,9 @@ interface ReportSummary {
   totalTax?: number;
   totalReturnTax?: number;
   netPurchaseTax?: number;
+  totalFreight?: number;
+  totalReturnFreight?: number;
+  netFreight?: number;
   legacyEntries?: number;
   inputCGST?: number;
   inputSGST?: number;
@@ -425,6 +428,8 @@ export const ReportsManager: React.FC = () => {
               subtotal,
               tax_amount,
               total_amount,
+              additional_charges_after_gst,
+              additional_charges_label,
               invoice_type,
               entity_type,
               payment_status,
@@ -456,6 +461,8 @@ export const ReportsManager: React.FC = () => {
               subtotal,
               tax_amount,
               total_amount,
+              additional_charges_after_gst,
+              additional_charges_label,
               invoice_type,
               entity_type,
               payment_status,
@@ -1176,13 +1183,14 @@ export const ReportsManager: React.FC = () => {
 
           case 'purchase-report':
             columns = [
-              { key: 'po_number', label: 'PO #', width: '15%', align: 'left' },
-              { key: 'invoice_date', label: 'Date', width: '12%', align: 'left', format: 'date' },
-              { key: 'supplier', label: 'Supplier', width: '20%', align: 'left' },
-              { key: 'subtotal', label: 'Subtotal', width: '15%', align: 'right', format: 'currency' },
-              { key: 'tax_amount', label: 'Tax', width: '12%', align: 'right', format: 'currency' },
-              { key: 'amount', label: 'Total', width: '15%', align: 'right', format: 'currency' },
-              { key: 'status', label: 'Status', width: '11%', align: 'left' }
+              { key: 'po_number', label: 'PO #', width: '12%', align: 'left' },
+              { key: 'invoice_date', label: 'Date', width: '10%', align: 'left', format: 'date' },
+              { key: 'supplier', label: 'Supplier', width: '18%', align: 'left' },
+              { key: 'subtotal', label: 'Subtotal', width: '12%', align: 'right', format: 'currency' },
+              { key: 'tax_amount', label: 'Tax', width: '10%', align: 'right', format: 'currency' },
+              { key: 'additional_charges', label: 'Freight', width: '10%', align: 'right', format: 'currency' },
+              { key: 'amount', label: 'Total', width: '12%', align: 'right', format: 'currency' },
+              { key: 'status', label: 'Status', width: '10%', align: 'left' }
             ];
             formattedData = reportData.map(row => ({
               po_number: row.po_number || row.subcategory || '',
@@ -1190,6 +1198,7 @@ export const ReportsManager: React.FC = () => {
               supplier: row.supplier || 'N/A',
               subtotal: row.subtotal || 0,
               tax_amount: row.tax_amount || 0,
+              additional_charges: (row as any).additional_charges || 0,
               amount: row.amount || 0,
               status: row.status || 'draft'
             }));
@@ -1612,6 +1621,7 @@ export const ReportsManager: React.FC = () => {
                         <TableHead>Supplier</TableHead>
                         <TableHead className="text-right">Subtotal</TableHead>
                         <TableHead className="text-right">Tax</TableHead>
+                        <TableHead className="text-right">Freight</TableHead>
                         <TableHead className="text-right">Total</TableHead>
                         <TableHead>Status</TableHead>
                       </>
@@ -1806,6 +1816,9 @@ export const ReportsManager: React.FC = () => {
                           <TableCell>{row.supplier || 'N/A'}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(row.subtotal || 0)}</TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(row.tax_amount || 0)}</TableCell>
+                          <TableCell className="text-right">
+                            {formatIndianCurrency((row as any).additional_charges || 0)}
+                          </TableCell>
                           <TableCell className="text-right">{formatIndianCurrency(row.amount)}</TableCell>
                           <TableCell>
                             <Badge variant={row.payment_status === 'paid' ? 'default' : 'outline'}>
@@ -2269,6 +2282,13 @@ export const ReportsManager: React.FC = () => {
                       <p className="text-lg font-semibold text-green-500">
                         {formatIndianCurrency(summary.netPurchase || summary.totalPurchases)}
                       </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm text-muted-foreground">Freight / Packaging</p>
+                      <p className="text-lg font-semibold text-orange-500">
+                        {formatIndianCurrency(summary.netFreight || summary.totalFreight || 0)}
+                      </p>
+                      <p className="text-xs text-muted-foreground">After GST, no tax</p>
                     </div>
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground">Total Tax</p>

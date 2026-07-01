@@ -176,6 +176,20 @@ function invoiceReducesStock(invoiceType: string, entityType: string): boolean {
   return false;
 }
 
+/** entity_id FK → business_entities only; suppliers use supplier_id */
+function resolveInvoicePartyIds(formData: {
+  entity_type: string;
+  entity_id: string;
+}): { entity_id: string | null; supplier_id: string | null } {
+  if (formData.entity_type === 'supplier' && formData.entity_id) {
+    return { entity_id: null, supplier_id: formData.entity_id };
+  }
+  return {
+    entity_id: formData.entity_id || null,
+    supplier_id: null,
+  };
+}
+
 interface PurchaseOrder {
   id: string;
   po_number: string;
@@ -338,7 +352,8 @@ export const InvoiceManager = () => {
 
   const refreshEligibleOriginalInvoices = useCallback(async (
     returnType: string,
-    entityId?: string
+    entityId?: string,
+    entityType?: string
   ) => {
     if (!selectedCompany?.company_name || !isReturnInvoiceType(returnType)) {
       setEligibleOriginalInvoices([]);
@@ -350,6 +365,7 @@ export const InvoiceManager = () => {
         companyName: selectedCompany.company_name,
         returnType,
         entityId: entityId || undefined,
+        entityType: entityType || undefined,
       });
       setEligibleOriginalInvoices(list);
     } finally {
@@ -408,7 +424,13 @@ export const InvoiceManager = () => {
     }
     try {
       const original = await fetchOriginalInvoiceSummary(invoiceId);
-      if (original.entity_id && original.entity_type) {
+      if (original.entity_type === 'supplier' && original.supplier_id) {
+        setFormData((prev) => ({
+          ...prev,
+          entity_id: original.supplier_id,
+          entity_type: 'supplier',
+        }));
+      } else if (original.entity_id && original.entity_type) {
         setFormData((prev) => ({
           ...prev,
           entity_id: original.entity_id,
@@ -423,7 +445,11 @@ export const InvoiceManager = () => {
 
   useEffect(() => {
     if (isReturnInvoiceType(formData.invoice_type)) {
-      refreshEligibleOriginalInvoices(formData.invoice_type, formData.entity_id || undefined);
+      refreshEligibleOriginalInvoices(
+        formData.invoice_type,
+        formData.entity_id || undefined,
+        formData.entity_type
+      );
     } else {
       setEligibleOriginalInvoices([]);
       setSelectedOriginalInvoice("");
@@ -431,6 +457,7 @@ export const InvoiceManager = () => {
   }, [
     formData.invoice_type,
     formData.entity_id,
+    formData.entity_type,
     refreshEligibleOriginalInvoices,
   ]);
 
@@ -1030,17 +1057,15 @@ export const InvoiceManager = () => {
 
       // Create invoice
       let invoice: any;
+      const partyIds = resolveInvoicePartyIds(formData);
       const { data: invoiceData, error: invoiceError } = await supabase
         .from('invoices')
         .insert([{
           invoice_number: invoiceNumber,
           custom_invoice_number: formData.custom_invoice_number || null,
-          entity_id: formData.entity_id || null,
+          entity_id: partyIds.entity_id,
           entity_type: formData.entity_type,
-          supplier_id:
-            formData.entity_type === 'supplier' && formData.entity_id
-              ? formData.entity_id
-              : null,
+          supplier_id: partyIds.supplier_id,
           invoice_type: formData.invoice_type,
           payment_status: formData.payment_status,
           invoice_date: formData.invoice_date,
@@ -1071,17 +1096,15 @@ export const InvoiceManager = () => {
           // Duplicate invoice number error
           if (!formData.custom_invoice_number) {
             invoiceNumber = generateInvoiceNumber();
+            const retryPartyIds = resolveInvoicePartyIds(formData);
             const retry = await supabase
               .from('invoices')
               .insert([{ 
                 invoice_number: invoiceNumber,
                 custom_invoice_number: formData.custom_invoice_number || null,
-                entity_id: formData.entity_id || null,
+                entity_id: retryPartyIds.entity_id,
                 entity_type: formData.entity_type,
-                supplier_id:
-                  formData.entity_type === 'supplier' && formData.entity_id
-                    ? formData.entity_id
-                    : null,
+                supplier_id: retryPartyIds.supplier_id,
                 invoice_type: formData.invoice_type,
                 payment_status: formData.payment_status,
                 invoice_date: formData.invoice_date,
@@ -1337,7 +1360,7 @@ export const InvoiceManager = () => {
       } else if (skipPurchaseStockFromPo) {
         toast({
           title: "Purchase Invoice Saved",
-          description: "Stock was not changed. Confirm receipt on the PO to update inventory.",
+          description: "Stock was not changed (already updated when the PO was created).",
         });
       } else {
         // For non-inventory invoices (transport, wholesale, labour, other), skip inventory updates
@@ -2363,7 +2386,11 @@ export const InvoiceManager = () => {
                       fetchPurchaseOrders(value);
                     }
                     if (isReturnInvoiceType(value)) {
-                      refreshEligibleOriginalInvoices(value, formData.entity_id || undefined);
+                      refreshEligibleOriginalInvoices(
+                        value,
+                        formData.entity_id || undefined,
+                        formData.entity_type
+                      );
                     }
                   }}>
                     <SelectTrigger>
@@ -2491,7 +2518,11 @@ export const InvoiceManager = () => {
                       setFormData(prev => ({ ...prev, entity_id: value }));
                       if (isReturnInvoiceType(formData.invoice_type)) {
                         setSelectedOriginalInvoice("");
-                        refreshEligibleOriginalInvoices(formData.invoice_type, value);
+                        refreshEligibleOriginalInvoices(
+                          formData.invoice_type,
+                          value,
+                          formData.entity_type
+                        );
                       }
                     }
                   }}>
@@ -2555,7 +2586,8 @@ export const InvoiceManager = () => {
                       onClick={() =>
                         refreshEligibleOriginalInvoices(
                           formData.invoice_type,
-                          formData.entity_id || undefined
+                          formData.entity_id || undefined,
+                          formData.entity_type
                         )
                       }
                       className="h-8 text-xs"
@@ -2688,7 +2720,7 @@ export const InvoiceManager = () => {
                     <p className="text-xs text-muted-foreground mt-1">
                       {formData.invoice_type === 'purchase_return' 
                         ? 'Selected PO items will be populated for return/refund'
-                        : 'Selected PO items will be populated for invoice creation. Stock updates when you confirm receipt on the PO, not on invoice save.'}
+                        : 'Selected PO items will be populated for invoice creation. Stock was updated when the PO was created.'}
                     </p>
                   )}
                 </div>

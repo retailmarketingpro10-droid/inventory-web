@@ -36,18 +36,23 @@ export async function fetchEligibleOriginalInvoices(params: {
   companyName: string;
   returnType: string;
   entityId?: string;
+  entityType?: string;
 }): Promise<EligibleOriginalInvoice[]> {
   const sourceType = originalInvoiceTypeForReturn(params.returnType);
 
   let query = (supabase as any)
     .from('invoices')
-    .select('id, invoice_number, invoice_date, total_amount, entity_id, entity_type, payment_status')
+    .select('id, invoice_number, invoice_date, total_amount, entity_id, entity_type, payment_status, supplier_id')
     .eq('company_id', params.companyName)
     .eq('invoice_type', sourceType)
     .order('invoice_date', { ascending: false });
 
   if (params.entityId) {
-    query = query.eq('entity_id', params.entityId);
+    if (params.entityType === 'supplier') {
+      query = query.eq('supplier_id', params.entityId);
+    } else {
+      query = query.eq('entity_id', params.entityId);
+    }
   }
 
   const { data, error } = await query;
@@ -115,7 +120,7 @@ export async function loadReturnableLineItems(
 export async function fetchOriginalInvoiceSummary(invoiceId: string) {
   const { data, error } = await (supabase as any)
     .from('invoices')
-    .select('id, invoice_number, entity_id, entity_type, invoice_date, total_amount')
+    .select('id, invoice_number, entity_id, entity_type, supplier_id, invoice_date, total_amount')
     .eq('id', invoiceId)
     .single();
 

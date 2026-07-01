@@ -15,6 +15,8 @@ export type LedgerRole =
   | 'input_sgst'
   | 'input_igst'
   | 'stock_in_hand'
+  | 'freight_inward'
+  | 'freight_outward'
   | 'direct_expense'
   | 'indirect_expense'
   | 'indirect_income'
@@ -36,6 +38,10 @@ export interface LedgerMappingSettings {
   inputSgstAccountId?: string;
   inputIgstAccountId?: string;
   stockInHandAccountId?: string;
+  /** Freight / courier / packaging on purchase invoices (after GST) */
+  freightInwardAccountId?: string;
+  /** Shipping / delivery charges on sales invoices (after GST) */
+  freightOutwardAccountId?: string;
   directExpenseAccountIds?: string[];
   indirectExpenseAccountIds?: string[];
   indirectIncomeAccountIds?: string[];
@@ -77,6 +83,8 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Array<{
   { role: 'input_sgst', name: 'Input SGST', ledger_type: 'asset' },
   { role: 'input_igst', name: 'Input IGST', ledger_type: 'asset' },
   { role: 'stock_in_hand', name: 'Stock-in-Hand', ledger_type: 'asset' },
+  { role: 'freight_inward', name: 'Freight Inward', ledger_type: 'expense' },
+  { role: 'freight_outward', name: 'Freight Outward', ledger_type: 'income' },
   { role: 'capital', name: 'Capital Account', ledger_type: 'capital' },
 ];
 
@@ -96,6 +104,8 @@ export const LEDGER_ROLE_LABELS: Record<LedgerRole, string> = {
   input_sgst: 'Input SGST',
   input_igst: 'Input IGST',
   stock_in_hand: 'Stock-in-Hand',
+  freight_inward: 'Freight Inward (Purchase charges)',
+  freight_outward: 'Freight Outward (Sales charges)',
   direct_expense: 'Direct Expense',
   indirect_expense: 'Indirect Expense',
   indirect_income: 'Indirect Income',
@@ -119,6 +129,8 @@ export function roleToMappingKey(role: LedgerRole): keyof LedgerMappingSettings 
     input_sgst: 'inputSgstAccountId',
     input_igst: 'inputIgstAccountId',
     stock_in_hand: 'stockInHandAccountId',
+    freight_inward: 'freightInwardAccountId',
+    freight_outward: 'freightOutwardAccountId',
     capital: 'capitalAccountId',
   };
   return map[role] ?? null;

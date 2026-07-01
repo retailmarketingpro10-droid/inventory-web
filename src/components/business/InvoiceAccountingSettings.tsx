@@ -60,6 +60,8 @@ const PRIMARY_ROLES: LedgerRole[] = [
   'input_sgst',
   'input_igst',
   'stock_in_hand',
+  'freight_inward',
+  'freight_outward',
   'capital',
 ];
 
